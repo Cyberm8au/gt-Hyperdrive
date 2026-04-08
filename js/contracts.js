@@ -32,7 +32,7 @@
       const pricesArr = Array.isArray(pricesRaw) ? pricesRaw : (pricesRaw.prices || []);
       marketPrices = {};
       for (const p of pricesArr) {
-        marketPrices[p.matId] = p.currentPrice;
+        marketPrices[p.matId] = p.currentPrice / 100; // API returns integer cents
       }
 
       allContracts = contracts;
@@ -73,7 +73,7 @@
     const buying    = active.filter(c => c.type === 2);
     const expiring  = active.filter(c => c.expires && new Date(c.expires) - now < 86400000);
     const issues    = active.filter(c => hasIssue(c));
-    const sellVal   = selling.reduce((s, c) => s + (c.qty || 0) * (c.unitPrice || 0), 0);
+    const sellVal   = selling.reduce((s, c) => s + (c.qty || 0) * ((c.unitPrice || 0) / 100), 0);
 
     document.getElementById('s-total').textContent   = active.length;
     document.getElementById('s-sell').textContent    = selling.length;
@@ -105,9 +105,9 @@
   }
 
   function vsMarket(unitPrice, matId) {
-    const mkt = marketPrices[matId];
+    const mkt = marketPrices[matId]; // already normalized (÷100)
     if (!mkt || mkt === 0) return null;
-    return ((unitPrice - mkt) / mkt) * 100;
+    return ((unitPrice / 100 - mkt) / mkt) * 100;
   }
 
   function applyFilters() {
@@ -181,7 +181,7 @@
     tbody.innerHTML = rows.map(c => {
       const partner    = getPartner(c);
       const matName    = gameData.getMaterialName(c.matId);
-      const totalVal   = (c.qty || 0) * (c.unitPrice || 0);
+      const totalVal   = (c.qty || 0) * ((c.unitPrice || 0) / 100);
       const mktDiff    = vsMarket(c.unitPrice, c.matId);
       const expiring   = isExpiringSoon(c);
       const issue      = hasIssue(c);
@@ -247,7 +247,7 @@
           </td>
           <td>${partner?.name || '—'}</td>
           <td class="mono text-right">${GtApi.formatNum(c.qty)}</td>
-          <td class="mono text-right">${GtApi.formatNum(c.unitPrice)} cr</td>
+          <td class="mono text-right">${GtApi.formatPrice(c.unitPrice)}</td>
           <td class="text-right">${vsHtml}</td>
           <td class="mono text-right">${GtApi.formatCredits(totalVal)}</td>
           <td>${fillHtml}</td>

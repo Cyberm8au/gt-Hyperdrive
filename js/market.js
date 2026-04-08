@@ -105,17 +105,17 @@
 
     // ── Quick stats ──
     document.getElementById('qs-matname').textContent  = matName;
-    document.getElementById('qs-current').textContent  = GtApi.formatNum(data.currentPrice) + ' cr';
-    document.getElementById('qs-avg').textContent      = GtApi.formatNum(Math.round(data.avgPrice)) + ' cr';
+    document.getElementById('qs-current').textContent  = GtApi.formatPrice(data.currentPrice);
+    document.getElementById('qs-avg').textContent      = GtApi.formatPrice(data.avgPrice);
     document.getElementById('qs-qty').textContent      = GtApi.formatNum(data.totalQtyAvailable);
     document.getElementById('qs-vol').textContent      = GtApi.formatNum(Math.round(data.avgQtySoldDaily));
     document.getElementById('qs-orders').textContent   = (data.orders || []).length;
 
-    // Trend: compare current to 7-day avg
+    // Trend: compare current to 7-day avg (normalize all prices ÷100)
     const history = (data.priceHistory || []).slice().reverse(); // oldest first
     const recent7 = history.slice(-7);
-    const avg7    = recent7.length ? recent7.reduce((s, d) => s + d.avgPrice, 0) / recent7.length : data.avgPrice;
-    const trendPct = avg7 > 0 ? ((data.currentPrice - avg7) / avg7) * 100 : 0;
+    const avg7    = recent7.length ? recent7.reduce((s, d) => s + d.avgPrice / 100, 0) / recent7.length : data.avgPrice / 100;
+    const trendPct = avg7 > 0 ? ((data.currentPrice / 100 - avg7) / avg7) * 100 : 0;
     const trendCls = trendPct > 1 ? 'trend-up' : trendPct < -1 ? 'trend-down' : 'trend-flat';
     const trendIcon = trendPct > 1 ? '↑' : trendPct < -1 ? '↓' : '→';
     document.getElementById('qs-trend').innerHTML =
@@ -129,10 +129,10 @@
 
     // ── Price range label ──
     if (history.length) {
-      const prices = history.map(h => h.avgPrice);
-      const lo = Math.min(...prices), hi = Math.max(...prices);
+      const normPrices = history.map(h => h.avgPrice / 100);
+      const lo = Math.min(...normPrices), hi = Math.max(...normPrices);
       document.getElementById('price-range').textContent =
-        `Range: ${GtApi.formatNum(lo)} – ${GtApi.formatNum(hi)} cr`;
+        `Range: ${GtApi.formatCredits(lo)} – ${GtApi.formatCredits(hi)}`;
     }
 
     // ── Order book ──
@@ -147,7 +147,7 @@
       const d = new Date(h.date);
       return `${d.getMonth()+1}/${d.getDate()}`;
     });
-    const prices = history.map(h => h.avgPrice);
+    const prices = history.map(h => h.avgPrice / 100);
 
     if (priceChart) priceChart.destroy();
 
@@ -170,7 +170,7 @@
           },
           {
             label: 'Current',
-            data: Array(labels.length).fill(currentPrice),
+            data: Array(labels.length).fill(currentPrice / 100),
             borderColor: 'rgba(240,165,0,0.4)',
             borderWidth: 1,
             borderDash: [4, 4],
@@ -257,16 +257,17 @@
     const lowest = sorted[0]?.unitPrice;
 
     tbody.innerHTML = sorted.map((o, i) => {
-      const isMe    = o.cId === myCompanyId;
-      const totalVal = (o.qty || 0) * (o.unitPrice || 0);
-      const pctAbove = lowest > 0 ? ((o.unitPrice - lowest) / lowest * 100) : 0;
+      const isMe     = o.cId === myCompanyId;
+      const normPrice = (o.unitPrice || 0) / 100;
+      const totalVal  = (o.qty || 0) * normPrice;
+      const pctAbove  = lowest > 0 ? ((o.unitPrice - lowest) / lowest * 100) : 0;
 
       return `
         <tr class="${isMe ? 'your-order' : ''}">
           <td class="text-muted mono">${i + 1}</td>
           <td>${isMe ? '⭐ ' : ''}${o.cName || o.cId}</td>
           <td class="mono text-right">
-            ${GtApi.formatNum(o.unitPrice)} cr
+            ${GtApi.formatCredits(normPrice)}
             ${i > 0 ? `<span class="text-muted" style="font-size:10px">+${pctAbove.toFixed(1)}%</span>` : '<span class="badge badge-active" style="font-size:10px;padding:1px 5px;margin-left:4px">BEST</span>'}
           </td>
           <td class="mono text-right">${GtApi.formatNum(o.qty)}</td>
@@ -292,7 +293,7 @@
         <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <span class="badge ${badge}" style="font-size:10px">${dir}</span>
-            <span class="mono text-gold">${GtApi.formatNum(c.unitPrice)} cr</span>
+            <span class="mono text-gold">${GtApi.formatPrice(c.unitPrice)}</span>
           </div>
           <div style="color:var(--text-dim);margin-top:4px">${partner} · ${GtApi.formatNum(c.qty)} units · expires ${GtApi.timeUntil(c.expires)}</div>
         </div>

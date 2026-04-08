@@ -202,7 +202,7 @@
     const icon = node.isRaw ? '⚙' : node.children?.length ? '▼' : '▶';
     const qtyFmt   = formatQty(node.qty);
     const priceFmt = node.isRaw
-      ? GtApi.formatNum(Math.round(node.unitPrice)) + ' cr'
+      ? GtApi.formatCredits(node.unitPrice)
       : `(derived)`;
     const totalFmt = GtApi.formatCredits(node.totalCost);
 
@@ -269,7 +269,7 @@
         <div class="left"><span class="mat-name">${e.matName}</span></div>
         <div class="right">
           <span class="qty-label">${formatQty(e.qty)}</span>
-          <span class="price-label">${GtApi.formatNum(Math.round(e.unitPrice))} cr</span>
+          <span class="price-label">${GtApi.formatCredits(e.unitPrice)}</span>
           <span class="total-label">${GtApi.formatCredits(e.totalCost)}</span>
         </div>
       </div>
@@ -291,16 +291,16 @@
     document.getElementById('res-qty').textContent     = GtApi.formatNum(qty);
     document.getElementById('res-totalcost').textContent =
       GtApi.formatCredits(totalCost) + ` (${GtApi.formatCredits(unitCost)} ea)`;
-    document.getElementById('res-unitcost').textContent = GtApi.formatNum(Math.round(unitCost)) + ' cr';
+    document.getElementById('res-unitcost').textContent = GtApi.formatCredits(unitCost);
 
-    document.getElementById('res-breakeven').textContent = GtApi.formatNum(Math.round(unitCost)) + ' cr';
-    document.getElementById('res-guild').textContent     = GtApi.formatNum(guildPrice) + ' cr';
+    document.getElementById('res-breakeven').textContent = GtApi.formatCredits(unitCost);
+    document.getElementById('res-guild').textContent     = GtApi.formatCredits(guildPrice);
     document.getElementById('res-guild-sub').innerHTML   = `at <span id="res-guild-pct">${guildPct}</span>% margin`;
-    document.getElementById('res-market').textContent    = GtApi.formatNum(marketPrice) + ' cr';
+    document.getElementById('res-market').textContent    = GtApi.formatCredits(marketPrice);
     document.getElementById('res-market-sub').innerHTML  = `at <span id="res-market-pct">${marginPct}</span>% margin`;
 
     if (currentMkt !== null) {
-      document.getElementById('res-current').textContent = GtApi.formatNum(currentMkt) + ' cr';
+      document.getElementById('res-current').textContent = GtApi.formatCredits(currentMkt);
       const mktMargin = ((currentMkt - unitCost) / unitCost) * 100;
       const pill = document.getElementById('market-margin-pill');
       const desc = document.getElementById('market-margin-desc');
@@ -332,7 +332,7 @@
       const pricesRaw = await api.getMatPrices();
       const pricesArr = Array.isArray(pricesRaw) ? pricesRaw : (pricesRaw.prices || []);
       allPrices = {};
-      for (const p of pricesArr) allPrices[p.matId] = p.currentPrice;
+      for (const p of pricesArr) allPrices[p.matId] = p.currentPrice / 100; // API stores as integer cents
 
       // Compute cost tree
       const rawTotals = {};

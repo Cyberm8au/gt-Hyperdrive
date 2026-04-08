@@ -212,13 +212,13 @@
 
     tbody.innerHTML = orders.map(o => {
       const name  = gamedata.getMaterialName(o.matId);
-      const total = (o.qty || 0) * (o.unitPrice || 0);
+      const total = (o.qty || 0) * ((o.unitPrice || 0) / 100);
       return `
         <tr>
           <td><strong>${name}</strong> <span class="text-muted" style="font-size:11px">#${o.matId}</span></td>
           <td class="mono text-right">${GtApi.formatNum(o.qty)}</td>
           <td class="mono text-right text-dim">${GtApi.formatNum(o.qtyTot)}</td>
-          <td class="mono text-right text-gold">${GtApi.formatNum(o.unitPrice)} cr</td>
+          <td class="mono text-right text-gold">${GtApi.formatPrice(o.unitPrice)}</td>
           <td class="mono text-right">${GtApi.formatCredits(total)}</td>
         </tr>
       `;

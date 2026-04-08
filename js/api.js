@@ -195,13 +195,19 @@ class GtApi {
     return this.getCompany();
   }
 
-  /** Format a credit value as a readable string */
+  /** Format a credit/cash value as a readable dollar string */
   static formatCredits(n) {
     if (n === null || n === undefined) return '—';
-    if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B cr';
-    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M cr';
-    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K cr';
-    return n.toLocaleString() + ' cr';
+    if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+    return '$' + (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  /** Format a raw API price value (API stores prices as integer cents, ÷100 for display) */
+  static formatPrice(v) {
+    if (v === null || v === undefined) return '—';
+    return GtApi.formatCredits(v / 100);
   }
 
   /** Format a number with commas */
