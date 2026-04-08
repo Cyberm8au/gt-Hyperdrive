@@ -185,8 +185,51 @@ class GameData {
   // ─── Worker helpers ───────────────────────────────────────────────────────
 
   getWorkerTierName(tier) {
-    const names = ['', 'Tier 1', 'Tier 2', 'Tier 3', 'Tier 4'];
+    const names = ['', 'Worker', 'Technician', 'Engineer', 'Scientist'];
     return names[tier] || `Tier ${tier}`;
+  }
+
+  /** Worker tier definition from gamedata (type = 1..4). Returns null if unknown. */
+  getWorker(tier) {
+    return this.workers.find(w => w.type === tier) || null;
+  }
+
+  /** Burden per worker (from wiki): W=1.0 T=1.5 E=2.5 S=4.0 */
+  getWorkerBurden(tier) {
+    return [0, 1.0, 1.5, 2.5, 4.0][tier] || 0;
+  }
+
+  /**
+   * Given a `workersNeeded` array from a building and a duration in days,
+   * return { matId → quantity } of essential consumables consumed, pre-overhead.
+   * optionalsToo=true includes optional consumables as well.
+   */
+  getConsumablesForBuilding(workersNeeded, durationDays, optionalsToo = false) {
+    const totals = {};
+    if (!Array.isArray(workersNeeded)) return totals;
+    for (let t = 1; t <= 4; t++) {
+      const count = workersNeeded[t - 1] || 0;
+      if (count <= 0) continue;
+      const w = this.getWorker(t);
+      if (!w?.consumables) continue;
+      for (const c of w.consumables) {
+        if (!c.essential && !optionalsToo) continue;
+        const daily = count * c.amount;
+        const qty = daily * durationDays;
+        totals[c.matId] = (totals[c.matId] || 0) + qty;
+      }
+    }
+    return totals;
+  }
+
+  /** Sum burden contribution for a workersNeeded array (used for overhead calc). */
+  getBurdenForBuilding(workersNeeded) {
+    if (!Array.isArray(workersNeeded)) return 0;
+    let total = 0;
+    for (let t = 1; t <= 4; t++) {
+      total += (workersNeeded[t - 1] || 0) * this.getWorkerBurden(t);
+    }
+    return total;
   }
 
   // ─── Planet helpers ───────────────────────────────────────────────────────

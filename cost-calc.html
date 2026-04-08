@@ -85,6 +85,50 @@
         <div class="info-box" style="margin-top:12px;font-size:12px">
           💡 Raw material costs use <strong>current exchange prices</strong>. Costs reflect what you'd pay buying inputs at market rate today.
         </div>
+
+        <!-- Company settings panel (perks, workforce) -->
+        <div class="card" style="margin-top:12px">
+          <div class="card-header">
+            <div class="card-title">⚙ Company Settings</div>
+            <button id="settings-toggle" class="btn btn-ghost" style="padding:4px 10px;font-size:11px">▸ Show</button>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:-4px">
+            Cached locally. Used for consumable overhead and throughput.
+          </div>
+          <div id="settings-body" style="display:none;margin-top:12px">
+            <label class="form-label" style="margin-top:8px">Workforce Efficiency level (−2% consumption/lvl)</label>
+            <input id="set-workforceEff" type="number" class="form-input" min="0" max="10" value="0">
+
+            <label class="form-label" style="margin-top:8px">Administrative Optimization level (−2.5% overhead/lvl)</label>
+            <input id="set-adminOpt" type="number" class="form-input" min="0" max="10" value="0">
+
+            <label class="form-label" style="margin-top:8px">Efficient Supervision level (−5% overhead/lvl)</label>
+            <input id="set-efficientSup" type="number" class="form-input" min="0" max="10" value="0">
+
+            <label class="form-label" style="margin-top:8px">Lax Supervision level (−35% overhead/lvl)</label>
+            <input id="set-laxSup" type="number" class="form-input" min="0" max="10" value="0">
+
+            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px">
+              <input id="set-strictSup" type="checkbox"> Strict Supervision active (+50% overhead, +25% speed)
+            </label>
+
+            <label class="form-label" style="margin-top:8px">Guild Admin Center reduction (%)</label>
+            <input id="set-guildAdmin" type="number" class="form-input" min="0" step="0.1" value="0">
+
+            <label class="form-label" style="margin-top:8px">Total Empire Burden (Σ workers × burden)</label>
+            <input id="set-empireBurden" type="number" class="form-input" min="0" step="10" value="2000">
+
+            <label class="form-label" style="margin-top:8px">Production Speed Bonus (%, tech + perks)</label>
+            <input id="set-prodSpeed" type="number" class="form-input" min="0" step="1" value="0">
+
+            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px">
+              <input id="set-includeConsumables" type="checkbox" checked> Include consumables in cost
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
+              <input id="set-includeOptionals" type="checkbox"> Include optional consumables
+            </label>
+          </div>
+        </div>
       </div>
 
       <!-- Right panel: results -->
@@ -143,6 +187,81 @@
               profit margin
               <span id="market-margin-desc" style="font-size:11px"></span>
             </div>
+          </div>
+
+          <!-- Throughput & Building -->
+          <div id="throughput-panel" class="card" style="margin-bottom:16px;display:none">
+            <div class="card-header">
+              <div class="card-title">🏭 Production & Throughput</div>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Top-level building</span>
+              <span class="cost-value" id="tp-building">—</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Building tier</span>
+              <span class="cost-value" id="tp-tier">—</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Top recipe total time</span>
+              <span class="cost-value text-mono" id="tp-toptime">—</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Full chain time (sequential)</span>
+              <span class="cost-value text-mono" id="tp-totaltime">—</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Throughput</span>
+              <span class="cost-value text-mono fw-700" id="tp-perday">—</span>
+            </div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:4px" id="tp-speednote"></div>
+            <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+              <div style="font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px">Workers required</div>
+              <div id="tp-workers"></div>
+            </div>
+          </div>
+
+          <!-- Consumables -->
+          <div id="consumables-panel" class="card" style="margin-bottom:16px;display:none">
+            <div class="card-header">
+              <div class="card-title">🍞 Worker Consumables</div>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Consumable cost</span>
+              <span class="cost-value text-mono fw-700" id="cp-total">—</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">% of total cost</span>
+              <span class="cost-value" id="cp-pct">—</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Overhead penalty</span>
+              <span class="cost-value" id="cp-overheadpct">—</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Effective consumption mult</span>
+              <span class="cost-value text-mono" id="cp-totalmult">—</span>
+            </div>
+            <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+              <div id="cp-list"></div>
+            </div>
+          </div>
+
+          <!-- Self-sufficiency -->
+          <div id="selfsuf-panel" class="card" style="margin-bottom:16px;display:none">
+            <div class="card-header">
+              <div class="card-title">🧭 Empire Self-Sufficiency</div>
+              <div style="font-size:11px;color:var(--text-muted)">Produced by you: <strong id="ss-ratio">—</strong></div>
+            </div>
+            <div id="ss-list"></div>
+          </div>
+
+          <!-- Profit at volume -->
+          <div id="profit-panel" class="card" style="margin-bottom:16px;display:none">
+            <div class="card-header">
+              <div class="card-title">💰 Profit at Volume</div>
+            </div>
+            <div id="pr-list"></div>
           </div>
 
           <!-- Ingredient tree -->

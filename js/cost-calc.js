@@ -8,8 +8,62 @@
 
   let selectedMatId = null;
   let selectedRecipe = null;
-  let allPrices = {};       // matId → currentPrice
-  let lastResult = null;    // { tree, rawTotals, totalCost }
+  let allPrices = {};       // matId → currentPrice (normalised, credits)
+  let lastResult = null;    // { tree, rawTotals, totalCost, consumTotals, timeMinutes, topBuilding }
+  let empireProduced = null; // Set<matId> produced by user's own bases
+
+  // ─── Settings (persisted) ──────────────────────────────────────────────────
+  // User-tunable values representing their company state. Auto-detection of
+  // perk levels is not currently supported by the public API, so the user
+  // enters them once and they're cached in localStorage.
+  const SETTINGS_KEY = 'gt_costcalc_settings';
+  const DEFAULT_SETTINGS = {
+    workforceEffLvl: 0,        // Workforce Efficiency: -2% consumption per level
+    adminOptLvl: 0,            // Administrative Optimization: -2.5% overhead mult per lvl
+    efficientSupLvl: 0,        // Efficient Supervision: -5% overhead mult per lvl
+    laxSupLvl: 0,              // Lax Supervision: -35% overhead mult per lvl
+    strictSup: false,          // Strict Supervision keystone: +50% overhead mult
+    guildAdminCenter: 0,       // Guild Admin Center flat % reduction (0-100)
+    empireBurden: 2000,        // Total empire workforce burden (Σ workers × burden)
+    prodSpeedBonusPct: 0,      // Aggregate production-speed bonus from tech + perks (%)
+    includeOptionals: false,   // Factor optional consumables in cost
+    includeConsumables: true   // Master toggle
+  };
+  let settings = { ...DEFAULT_SETTINGS };
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) settings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch (_) {}
+  function saveSettings() {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
+  }
+
+  /**
+   * Compute current consumption multiplier from settings.
+   * Returns { overheadMult, consumptionPerkMult, totalMult } where
+   * totalMult is applied to base consumable rates.
+   */
+  function computeConsumptionMultiplier() {
+    // Base overhead from burden
+    const overheadRaw = Math.max(0, (settings.empireBurden - 2000) / 100000);
+    // Multiplicative reductions stack additively as percent reductions
+    let overheadReductionPct =
+      settings.adminOptLvl * 2.5 +
+      settings.efficientSupLvl * 5 +
+      settings.laxSupLvl * 35;
+    if (settings.strictSup) overheadReductionPct -= 50; // penalty
+    const overheadAfterMult = overheadRaw * Math.max(0, 1 - overheadReductionPct / 100);
+    const flatRed = Math.min(settings.guildAdminCenter / 100, overheadAfterMult / 2);
+    const overheadFinal = Math.max(0, overheadAfterMult - flatRed);
+    const overheadMult = 1 + overheadFinal;
+    const consumptionPerkMult = Math.max(0, 1 - (settings.workforceEffLvl * 2) / 100);
+    return {
+      overheadMult,
+      consumptionPerkMult,
+      totalMult: overheadMult * consumptionPerkMult,
+      overheadFinalPct: overheadFinal * 100
+    };
+  }
 
   // ─── Autocomplete ──────────────────────────────────────────────────────────
 
@@ -123,8 +177,8 @@
    * Returns { cost, tree } where tree is an array of nodes for rendering.
    * rawTotals accumulates { matId → totalQty } for raw material summary.
    */
-  async function calcCost(matId, qty, depth = 0, visited = new Set(), rawTotals = {}) {
-    if (depth > 10) return { cost: 0, tree: [] }; // guard against deep recursion
+  async function calcCost(matId, qty, depth = 0, visited = new Set(), rawTotals = {}, consumTotals = {}, topRef = {}) {
+    if (depth > 10) return { cost: 0, tree: [], timeMinutes: 0 }; // guard against deep recursion
 
     const recipe = selectedRecipe && depth === 0
       ? selectedRecipe
@@ -142,6 +196,7 @@
 
       return {
         cost: totalCost,
+        timeMinutes: 0,
         tree: [{
           matId, matName, qty, unitPrice: price,
           totalCost, isRaw: true, depth, children: []
@@ -152,34 +207,72 @@
     // Guard circular references
     if (visited.has(matId)) {
       const price = allPrices[matId] ?? 0;
-      return { cost: price * qty, tree: [{ matId, matName, qty, unitPrice: price, totalCost: price * qty, isRaw: true, depth, children: [] }] };
+      return { cost: price * qty, timeMinutes: 0, tree: [{ matId, matName, qty, unitPrice: price, totalCost: price * qty, isRaw: true, depth, children: [] }] };
     }
     visited.add(matId);
 
     const output  = gameData.getRecipeOutput(recipe);
     const inputs  = gameData.getRecipeInputs(recipe);
     const outAmt  = output?.amount || 1;
-    // How many recipe runs needed to produce `qty` units
     const runs    = qty / outAmt;
+    const building = gameData.getRecipeBuilding(recipe);
+    const speedMult = 1 + (settings.prodSpeedBonusPct || 0) / 100;
+    const runMinutes = (recipe.timeMinutes || 0) / speedMult;
+    const recipeTimeMinutes = runMinutes * runs;
+    const recipeDurationDays = recipeTimeMinutes / 1440;
 
     let totalCost = 0;
+    let subtreeTime = 0;
     const children = [];
 
     for (const inp of inputs) {
       const neededQty = inp.amount * runs;
-      const sub = await calcCost(inp.matId, neededQty, depth + 1, new Set(visited), rawTotals);
+      const sub = await calcCost(inp.matId, neededQty, depth + 1, new Set(visited), rawTotals, consumTotals, topRef);
       totalCost += sub.cost;
+      subtreeTime += sub.timeMinutes || 0;
       children.push(...sub.tree);
     }
 
+    // Consumable cost — essentials (and optionals if enabled) for the workers
+    // required to man `building` for `recipeDurationDays`, scaled by the
+    // current consumption multiplier from settings.
+    let consumCost = 0;
+    if (settings.includeConsumables && building?.workersNeeded && recipeDurationDays > 0) {
+      const raw = gameData.getConsumablesForBuilding(
+        building.workersNeeded,
+        recipeDurationDays,
+        settings.includeOptionals
+      );
+      const mult = computeConsumptionMultiplier().totalMult;
+      for (const [midStr, baseQty] of Object.entries(raw)) {
+        const mid = parseInt(midStr);
+        const effectiveQty = baseQty * mult;
+        const price = allPrices[mid] ?? 0;
+        consumCost += effectiveQty * price;
+        consumTotals[mid] = (consumTotals[mid] || 0) + effectiveQty;
+      }
+    }
+    totalCost += consumCost;
+
     visited.delete(matId);
+
+    if (depth === 0) {
+      topRef.building = building;
+      topRef.runs = runs;
+      topRef.runMinutes = runMinutes;
+      topRef.workersNeeded = building?.workersNeeded || null;
+    }
 
     return {
       cost: totalCost,
+      timeMinutes: recipeTimeMinutes + subtreeTime,
       tree: [{
         matId, matName, qty,
         unitPrice: totalCost / qty,
-        totalCost, isRaw: false, depth, children
+        totalCost, isRaw: false, depth, children,
+        building: building?.name,
+        runMinutes, runs,
+        consumCost
       }]
     };
   }
@@ -314,6 +407,156 @@
     }
   }
 
+  // ─── Render additional context panels ─────────────────────────────────────
+
+  function formatMinutes(m) {
+    if (!m || m < 0.01) return '—';
+    if (m < 60) return m.toFixed(1) + 'm';
+    const h = Math.floor(m / 60);
+    const mm = Math.round(m % 60);
+    if (h < 24) return `${h}h ${mm}m`;
+    const d = Math.floor(h / 24);
+    const hh = h % 24;
+    return `${d}d ${hh}h`;
+  }
+
+  function renderThroughputAndBuilding(topRef, timeMinutes, qty) {
+    const el = document.getElementById('throughput-panel');
+    if (!el) return;
+    if (!topRef.building) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+
+    const b = topRef.building;
+    const workers = topRef.workersNeeded || [0,0,0,0];
+    const tierLabels = ['Workers','Technicians','Engineers','Scientists'];
+    const workerLines = workers.map((n, i) => n > 0
+      ? `<div class="cost-row"><span class="cost-label">${tierLabels[i]}</span><span class="cost-value">${n.toLocaleString()}</span></div>`
+      : ''
+    ).join('');
+
+    const topRunMinutes = topRef.runMinutes * topRef.runs;
+    const unitsPerDay = topRef.runMinutes > 0
+      ? (qty / topRunMinutes) * 1440
+      : 0;
+
+    document.getElementById('tp-building').textContent = b.name || '—';
+    document.getElementById('tp-tier').textContent = 'Tier ' + (b.tier ?? '?');
+    document.getElementById('tp-toptime').textContent = formatMinutes(topRunMinutes);
+    document.getElementById('tp-totaltime').textContent = formatMinutes(timeMinutes);
+    document.getElementById('tp-perday').textContent = unitsPerDay >= 1
+      ? unitsPerDay.toFixed(0) + ' / day'
+      : unitsPerDay > 0 ? unitsPerDay.toFixed(2) + ' / day' : '—';
+    document.getElementById('tp-workers').innerHTML = workerLines || '<div style="color:var(--text-muted);font-size:11px">None</div>';
+    const speed = settings.prodSpeedBonusPct;
+    document.getElementById('tp-speednote').textContent = speed > 0
+      ? `(Includes ${speed}% production-speed bonus from settings)`
+      : '';
+  }
+
+  function renderConsumables(consumTotals, totalCost) {
+    const section = document.getElementById('consumables-panel');
+    if (!section) return;
+    const entries = Object.entries(consumTotals).map(([id, qty]) => ({
+      matId: parseInt(id),
+      matName: gameData.getMaterialName(parseInt(id)),
+      qty,
+      unitPrice: allPrices[parseInt(id)] ?? 0,
+      totalCost: qty * (allPrices[parseInt(id)] ?? 0)
+    })).sort((a, b) => b.totalCost - a.totalCost);
+
+    if (!settings.includeConsumables || !entries.length) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    const consumSum = entries.reduce((s, e) => s + e.totalCost, 0);
+    const pctOfTotal = totalCost > 0 ? (consumSum / totalCost) * 100 : 0;
+    const mult = computeConsumptionMultiplier();
+
+    document.getElementById('cp-total').textContent = GtApi.formatCredits(consumSum);
+    document.getElementById('cp-pct').textContent = pctOfTotal.toFixed(1) + '%';
+    document.getElementById('cp-overheadpct').textContent = mult.overheadFinalPct.toFixed(1) + '%';
+    document.getElementById('cp-totalmult').textContent = '×' + mult.totalMult.toFixed(3);
+
+    document.getElementById('cp-list').innerHTML = entries.map(e => `
+      <div class="tree-row is-raw">
+        <div class="left"><span class="mat-name">${e.matName}</span></div>
+        <div class="right">
+          <span class="qty-label">${formatQty(e.qty)}</span>
+          <span class="price-label">${GtApi.formatCredits(e.unitPrice)}</span>
+          <span class="total-label">${GtApi.formatCredits(e.totalCost)}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderSelfSufficiency(rawTotals, consumTotals) {
+    const section = document.getElementById('selfsuf-panel');
+    if (!section) return;
+    if (!empireProduced) { section.style.display = 'none'; return; }
+
+    const inputs = new Set([
+      ...Object.keys(rawTotals).map(Number),
+      ...Object.keys(consumTotals).map(Number)
+    ]);
+    if (!inputs.size) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    const rows = [...inputs].map(mid => {
+      const haveIt = empireProduced.has(mid);
+      const qty = (rawTotals[mid] || 0) + (consumTotals[mid] || 0);
+      return { mid, name: gameData.getMaterialName(mid), haveIt, qty };
+    }).sort((a, b) => Number(b.haveIt) - Number(a.haveIt) || a.name.localeCompare(b.name));
+
+    const produced = rows.filter(r => r.haveIt).length;
+    document.getElementById('ss-ratio').textContent = `${produced} / ${rows.length}`;
+    document.getElementById('ss-list').innerHTML = rows.map(r => `
+      <div class="tree-row ${r.haveIt ? 'is-crafted' : 'is-raw'}" style="padding:4px 0">
+        <div class="left">
+          <span style="display:inline-block;width:18px;color:${r.haveIt ? 'var(--success,#2ecc71)' : 'var(--warn,#e67e22)'}">${r.haveIt ? '✓' : '✗'}</span>
+          <span class="mat-name">${r.name}</span>
+        </div>
+        <div class="right">
+          <span class="qty-label">${formatQty(r.qty)}</span>
+          <span class="total-label" style="color:${r.haveIt ? 'var(--text-dim)' : 'var(--warn,#e67e22)'}">${r.haveIt ? 'produced' : 'must buy'}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderProfitScenarios(unitCost, matId, qty) {
+    const section = document.getElementById('profit-panel');
+    if (!section) return;
+    const currentMkt = allPrices[matId];
+    if (!currentMkt) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    const guildPct = parseInt(document.getElementById('guild-slider').value);
+    const marketPct = parseInt(document.getElementById('margin-slider').value);
+    const scenarios = [
+      { label: 'At Current Exchange', price: currentMkt },
+      { label: `At Guild (+${guildPct}%)`, price: unitCost * (1 + guildPct / 100) },
+      { label: `At Market (+${marketPct}%)`, price: unitCost * (1 + marketPct / 100) }
+    ];
+
+    document.getElementById('pr-list').innerHTML = scenarios.map(s => {
+      const revenue = s.price * qty;
+      const profit = (s.price - unitCost) * qty;
+      const marginPct = unitCost > 0 ? ((s.price - unitCost) / unitCost) * 100 : 0;
+      const cls = profit >= 0 ? 'positive' : 'negative';
+      return `
+        <div class="cost-row" style="padding:6px 0">
+          <div class="cost-label">
+            <div style="font-weight:600">${s.label}</div>
+            <div style="font-size:10px;color:var(--text-muted)">${GtApi.formatCredits(s.price)} ea</div>
+          </div>
+          <div class="cost-value" style="text-align:right">
+            <div class="text-mono">${GtApi.formatCredits(revenue)}</div>
+            <div class="margin-pill ${cls}" style="font-size:10px">${profit >= 0 ? '+' : ''}${GtApi.formatCredits(profit)} (${marginPct.toFixed(1)}%)</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
   // ─── Main calculate action ─────────────────────────────────────────────────
 
   async function calculate() {
@@ -334,11 +577,18 @@
       allPrices = {};
       for (const p of pricesArr) allPrices[p.matId] = p.currentPrice / 100; // API stores as integer cents
 
+      // Kick off self-sufficiency fetch (don't block if it fails)
+      maybeFetchEmpireProduced().catch(() => {});
+
       // Compute cost tree
       const rawTotals = {};
-      const { cost, tree } = await calcCost(selectedMatId, qty, 0, new Set(), rawTotals);
+      const consumTotals = {};
+      const topRef = {};
+      const { cost, tree, timeMinutes } = await calcCost(
+        selectedMatId, qty, 0, new Set(), rawTotals, consumTotals, topRef
+      );
 
-      lastResult = { tree, rawTotals, totalCost: cost };
+      lastResult = { tree, rawTotals, consumTotals, totalCost: cost, timeMinutes, topRef, qty };
 
       // Show results
       document.getElementById('result-placeholder').style.display = 'none';
@@ -347,6 +597,10 @@
       renderPriceSummary(selectedMatId, qty, cost);
       renderTree(tree, document.getElementById('ingredient-tree'));
       renderRawSummary(rawTotals);
+      renderThroughputAndBuilding(topRef, timeMinutes, qty);
+      renderConsumables(consumTotals, cost);
+      renderSelfSufficiency(rawTotals, consumTotals);
+      renderProfitScenarios(cost / qty, selectedMatId, qty);
       window._updateRateLimit(api);
     } catch (err) {
       errEl.textContent = err.message.replace(/^[A-Z_]+: /, '');
@@ -354,6 +608,31 @@
     } finally {
       btn.disabled = false;
       btn.textContent = 'Calculate Cost';
+    }
+  }
+
+  // ─── Empire self-sufficiency: what our own bases produce ──────────────────
+
+  async function maybeFetchEmpireProduced() {
+    if (empireProduced) return;
+    try {
+      const bases = await api.getBases();
+      const basesArr = Array.isArray(bases) ? bases : (bases.bases || []);
+      const set = new Set();
+      for (const b of basesArr) {
+        const orders = b.productionOrders || b.po || [];
+        for (const o of orders) {
+          const rId = o.rId || o.recipeId;
+          if (!rId) continue;
+          const recipe = gameData.recipes.find(r => r.id === rId);
+          const outId = recipe?.output?.id ?? recipe?.output?.i;
+          if (outId !== undefined) set.add(outId);
+        }
+      }
+      empireProduced = set;
+      if (lastResult) renderSelfSufficiency(lastResult.rawTotals, lastResult.consumTotals);
+    } catch (_) {
+      empireProduced = new Set(); // mark as attempted
     }
   }
 
@@ -391,6 +670,43 @@
   });
 
   document.getElementById('qty-input').addEventListener('change', updatePricesOnly);
+
+  // ─── Settings panel ────────────────────────────────────────────────────────
+
+  function bindSetting(id, key, parser = v => v) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    // Populate
+    if (el.type === 'checkbox') el.checked = !!settings[key];
+    else el.value = settings[key];
+    el.addEventListener('change', () => {
+      settings[key] = el.type === 'checkbox' ? el.checked : parser(el.value);
+      saveSettings();
+      // Re-run calc if we have a last result
+      if (lastResult) calculate();
+    });
+  }
+
+  bindSetting('set-workforceEff', 'workforceEffLvl', v => parseInt(v) || 0);
+  bindSetting('set-adminOpt', 'adminOptLvl', v => parseInt(v) || 0);
+  bindSetting('set-efficientSup', 'efficientSupLvl', v => parseInt(v) || 0);
+  bindSetting('set-laxSup', 'laxSupLvl', v => parseInt(v) || 0);
+  bindSetting('set-strictSup', 'strictSup');
+  bindSetting('set-guildAdmin', 'guildAdminCenter', v => parseFloat(v) || 0);
+  bindSetting('set-empireBurden', 'empireBurden', v => parseFloat(v) || 0);
+  bindSetting('set-prodSpeed', 'prodSpeedBonusPct', v => parseFloat(v) || 0);
+  bindSetting('set-includeOptionals', 'includeOptionals');
+  bindSetting('set-includeConsumables', 'includeConsumables');
+
+  const settingsToggle = document.getElementById('settings-toggle');
+  const settingsBody = document.getElementById('settings-body');
+  if (settingsToggle && settingsBody) {
+    settingsToggle.addEventListener('click', () => {
+      const hidden = settingsBody.style.display === 'none';
+      settingsBody.style.display = hidden ? 'block' : 'none';
+      settingsToggle.textContent = hidden ? '▾ Hide' : '▸ Show';
+    });
+  }
 
   document.getElementById('clear-btn').addEventListener('click', () => {
     selectedMatId = null;
