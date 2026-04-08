@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — GT Companion</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="gt-nav"></div>
+
+  <div class="page-content">
+    <!-- Company header stats -->
+    <div id="company-stats" class="stat-grid">
+      <div class="stat-card gold">
+        <div class="stat-label">Credits</div>
+        <div class="stat-value gold" id="stat-cash">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Prestige Rank</div>
+        <div class="stat-value accent" id="stat-rank">#—</div>
+        <div class="stat-sub" id="stat-pr">— PR</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Stars</div>
+        <div class="stat-value" id="stat-stars">—</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">Bases</div>
+        <div class="stat-value green" id="stat-bases">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Ships</div>
+        <div class="stat-value" id="stat-ships">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Guild</div>
+        <div class="stat-value" id="stat-guild" style="font-size:14px;margin-top:4px">—</div>
+      </div>
+    </div>
+
+    <!-- Contract pulse -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="icon">📋</span> Contract Pulse</div>
+        <a href="contracts.html" style="font-size:12px;color:var(--accent);text-decoration:none">View all →</a>
+      </div>
+      <div class="pulse-row" id="contract-pulse">
+        <div class="pulse-item"><div class="pulse-num green" id="pulse-active">—</div><div class="pulse-label">Active</div></div>
+        <div class="pulse-item"><div class="pulse-num" id="pulse-selling">—</div><div class="pulse-label">Selling</div></div>
+        <div class="pulse-item"><div class="pulse-num" id="pulse-buying">—</div><div class="pulse-label">Buying</div></div>
+        <div class="pulse-item"><div class="pulse-num yellow" id="pulse-expiring">—</div><div class="pulse-label">Expiring &lt;24h</div></div>
+        <div class="pulse-item"><div class="pulse-num red" id="pulse-issues">—</div><div class="pulse-label">Issues</div></div>
+        <div class="pulse-item"><div class="pulse-num" id="pulse-pending">—</div><div class="pulse-label">Pending</div></div>
+      </div>
+    </div>
+
+    <!-- Fleet -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="icon">🚀</span> Fleet</div>
+        <span class="section-count" id="fleet-count"></span>
+      </div>
+      <div class="gt-table-wrap">
+        <table class="gt-table">
+          <thead>
+            <tr>
+              <th>Ship</th>
+              <th>Fuel</th>
+              <th>Condition</th>
+              <th>Cargo</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="fleet-tbody">
+            <tr><td colspan="5" class="loading-overlay"><div class="loading-spinner"></div><span>Loading fleet…</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Bases -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="icon">🏭</span> Bases</div>
+        <div class="refresh-bar">
+          <div class="refresh-dot"></div>
+          <span id="last-refresh" style="font-size:11px;color:var(--text-muted)">Auto-refreshes every 60s</span>
+        </div>
+      </div>
+      <div class="base-grid" id="base-grid">
+        <div class="base-card" style="grid-column:1/-1">
+          <div class="loading-overlay"><div class="loading-spinner"></div><span>Loading bases…</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Exchange listings -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="icon">💱</span> Your Exchange Listings</div>
+        <span class="section-count" id="exchange-count"></span>
+      </div>
+      <div class="gt-table-wrap">
+        <table class="gt-table">
+          <thead>
+            <tr>
+              <th>Material</th>
+              <th class="text-right">Qty Available</th>
+              <th class="text-right">Qty Total</th>
+              <th class="text-right">Unit Price</th>
+              <th class="text-right">Total Value</th>
+            </tr>
+          </thead>
+          <tbody id="exchange-tbody">
+            <tr><td colspan="5" class="loading-overlay"><div class="loading-spinner"></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/gamedata.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/dashboard.js"></script>
+</body>
+</html>

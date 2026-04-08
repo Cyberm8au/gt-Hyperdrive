@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GT Companion — Galactic Tycoons Tools</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .setup-page { flex-direction: column; gap: 0; padding: 0; }
+
+    /* Hero top banner */
+    .hero {
+      width: 100%;
+      padding: 56px 28px 0;
+      text-align: center;
+      position: relative;
+    }
+
+    .hero-eyebrow {
+      font-family: var(--font-display);
+      font-size: 10px;
+      letter-spacing: 4px;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 16px;
+      opacity: 0.8;
+    }
+
+    .hero-title {
+      font-family: var(--font-display);
+      font-size: clamp(32px, 6vw, 56px);
+      font-weight: 900;
+      letter-spacing: 6px;
+      line-height: 1.1;
+      background: linear-gradient(135deg, #fff 0%, var(--accent) 55%, #0066ff 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 14px;
+      filter: drop-shadow(0 0 40px rgba(0,212,255,0.3));
+    }
+
+    .hero-sub {
+      font-size: 15px;
+      color: var(--text-dim);
+      max-width: 480px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+
+    /* Feature strip */
+    .feature-strip {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 0 28px 48px;
+    }
+
+    .feature-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 30px;
+      border: 1px solid var(--border);
+      background: rgba(0,212,255,0.04);
+      font-size: 12px;
+      color: var(--text-dim);
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .feature-chip:hover {
+      border-color: var(--border-light);
+      color: var(--text);
+      background: rgba(0,212,255,0.08);
+    }
+
+    .feature-chip .chip-icon { font-size: 14px; }
+
+    /* Main card row */
+    .card-row {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+      width: 100%;
+      max-width: 1100px;
+      padding: 0 28px 60px;
+    }
+
+    /* Connect card */
+    .connect-card {
+      background: rgba(8, 15, 32, 0.85);
+      backdrop-filter: blur(24px) saturate(1.3);
+      -webkit-backdrop-filter: blur(24px) saturate(1.3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      padding: 36px;
+      width: 440px;
+      flex-shrink: 0;
+      box-shadow: 0 0 80px rgba(0,100,200,0.12), 0 0 0 1px rgba(0,212,255,0.05) inset, var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .connect-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 10%; right: 10%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0.5;
+    }
+
+    .connect-card::after {
+      content: '';
+      position: absolute;
+      bottom: -60px; left: -60px;
+      width: 200px; height: 200px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(0,80,200,0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .connect-title {
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      color: var(--text);
+      margin-bottom: 22px;
+    }
+
+    .steps-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding: 16px;
+      background: rgba(0,212,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .step-row {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+
+    .step-badge {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: rgba(0,212,255,0.1);
+      border: 1px solid rgba(0,212,255,0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 800;
+      font-family: var(--font-display);
+      color: var(--accent);
+      flex-shrink: 0;
+      box-shadow: 0 0 8px rgba(0,212,255,0.2);
+    }
+
+    #connect-error { display: none; margin-top: 10px; }
+    #connect-error.show { display: block; }
+
+    .key-note {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 14px;
+      font-size: 11px;
+      color: var(--text-muted);
+      letter-spacing: 0.2px;
+    }
+
+    /* Tools preview cards */
+    .tools-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .tool-card {
+      background: rgba(8, 15, 30, 0.7);
+      backdrop-filter: blur(14px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      text-decoration: none;
+      color: var(--text);
+      transition: all 0.22s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .tool-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(0,212,255,0.3), transparent);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .tool-card:hover {
+      border-color: var(--border-glow);
+      transform: translateX(4px);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 20px rgba(0,212,255,0.06);
+    }
+
+    .tool-card:hover::before { opacity: 1; }
+
+    .tool-icon {
+      width: 44px; height: 44px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      flex-shrink: 0;
+      border: 1px solid var(--border);
+      background: rgba(0,212,255,0.06);
+    }
+
+    .tool-icon.gold   { background: rgba(240,180,40,0.08); border-color: rgba(240,180,40,0.15); }
+    .tool-icon.green  { background: rgba(0,230,118,0.08); border-color: rgba(0,230,118,0.15); }
+    .tool-icon.purple { background: rgba(176,106,255,0.08); border-color: rgba(176,106,255,0.15); }
+
+    .tool-info { flex: 1; }
+
+    .tool-name {
+      font-family: var(--font-display);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      color: var(--text);
+      margin-bottom: 5px;
+    }
+
+    .tool-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+    .tool-arrow {
+      font-size: 16px;
+      color: var(--text-muted);
+      align-self: center;
+      transition: all 0.2s;
+    }
+
+    .tool-card:hover .tool-arrow {
+      color: var(--accent);
+      transform: translateX(4px);
+    }
+
+    /* Bottom bar */
+    .bottom-bar {
+      padding: 16px 28px;
+      border-top: 1px solid var(--border);
+      background: rgba(4,8,15,0.8);
+      backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      font-size: 11px;
+      color: var(--text-muted);
+      width: 100%;
+    }
+
+    .bottom-bar .dot { opacity: 0.3; }
+
+    @media (max-width: 900px) {
+      .card-row { flex-direction: column; padding: 0 16px 40px; }
+      .connect-card { width: 100%; }
+      .feature-strip { padding: 0 16px 32px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="setup-page">
+
+    <!-- Hero -->
+    <div class="hero">
+      <div class="hero-eyebrow">Galactic Tycoons · Player Toolkit</div>
+      <h1 class="hero-title">GT COMPANION</h1>
+      <p class="hero-sub">Empire-wide analytics, contract monitoring, production cost calculations and market analysis — all in your browser.</p>
+    </div>
+
+    <!-- Feature chips -->
+    <div class="feature-strip">
+      <div class="feature-chip"><span class="chip-icon">🚀</span> Zero install</div>
+      <div class="feature-chip"><span class="chip-icon">🔒</span> Key stays in your browser</div>
+      <div class="feature-chip"><span class="chip-icon">⚡</span> Live data from GT API</div>
+      <div class="feature-chip"><span class="chip-icon">🌐</span> Share URL with your guild</div>
+      <div class="feature-chip"><span class="chip-icon">♻</span> Auto-refreshes</div>
+    </div>
+
+    <!-- Main content -->
+    <div class="card-row">
+
+      <!-- Connect card -->
+      <div class="connect-card">
+        <div class="connect-title">CONNECT YOUR ACCOUNT</div>
+
+        <div class="steps-list">
+          <div class="step-row">
+            <div class="step-badge">1</div>
+            <span>In Galactic Tycoons go to <strong style="color:var(--text)">Settings → API</strong> and generate an <strong style="color:var(--accent)">Extended</strong> API key.</span>
+          </div>
+          <div class="step-row">
+            <div class="step-badge">2</div>
+            <span>Paste your key below. It's stored only in <em style="color:var(--text)">your browser</em> — never sent anywhere else.</span>
+          </div>
+          <div class="step-row">
+            <div class="step-badge">3</div>
+            <span>Click connect and all tools load instantly with your live data.</span>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom:14px">
+          <label class="form-label">Extended API Key</label>
+          <input id="api-key-input" type="password" class="form-input"
+            placeholder="Paste your API key here…"
+            autocomplete="off" spellcheck="false">
+          <div id="connect-error" class="error-box"></div>
+        </div>
+
+        <button id="connect-btn" class="btn btn-primary" style="width:100%;justify-content:center;font-family:var(--font-display);letter-spacing:1.5px;padding:12px">
+          CONNECT
+        </button>
+
+        <div class="key-note">
+          <span>🔒</span>
+          Your key is never transmitted to any server other than the official GT API.
+        </div>
+      </div>
+
+      <!-- Tools column -->
+      <div class="tools-col">
+        <a href="dashboard.html" class="tool-card">
+          <div class="tool-icon">📊</div>
+          <div class="tool-info">
+            <div class="tool-name">EMPIRE DASHBOARD</div>
+            <div class="tool-desc">All bases, fleet ETAs, workforce health, and contract status at a glance. Auto-refreshes every 60 seconds.</div>
+          </div>
+          <div class="tool-arrow">›</div>
+        </a>
+
+        <a href="contracts.html" class="tool-card">
+          <div class="tool-icon gold">📋</div>
+          <div class="tool-info">
+            <div class="tool-name">CONTRACT MONITOR</div>
+            <div class="tool-desc">Track all active contracts with ⚠ issue flags, expiry countdowns, vs-market pricing, and fill-rate bars.</div>
+          </div>
+          <div class="tool-arrow">›</div>
+        </a>
+
+        <a href="cost-calc.html" class="tool-card">
+          <div class="tool-icon green">🧮</div>
+          <div class="tool-info">
+            <div class="tool-name">PRODUCTION COST CALCULATOR</div>
+            <div class="tool-desc">Recursively resolve any item's ingredient tree to raw materials. Set guild discount and market margin prices.</div>
+          </div>
+          <div class="tool-arrow">›</div>
+        </a>
+
+        <a href="market.html" class="tool-card">
+          <div class="tool-icon purple">📈</div>
+          <div class="tool-info">
+            <div class="tool-name">MARKET ANALYSIS</div>
+            <div class="tool-desc">30-day price charts, daily volume trends, full order book, and your active contracts — per material.</div>
+          </div>
+          <div class="tool-arrow">›</div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Bottom bar -->
+    <div class="bottom-bar">
+      <span>GT Companion</span>
+      <span class="dot">·</span>
+      <span>Data from api.g2.galactictycoons.com</span>
+      <span class="dot">·</span>
+      <span>Your API key never leaves your device</span>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script>
+    // If already have a key, redirect to dashboard
+    if (GtApi.getStoredKey()) {
+      window.location.href = 'dashboard.html';
+    }
+
+    document.getElementById('connect-btn').addEventListener('click', async function () {
+      const key = document.getElementById('api-key-input').value.trim();
+      const errorEl = document.getElementById('connect-error');
+      const btn = this;
+
+      if (!key) {
+        errorEl.textContent = 'Please enter your API key.';
+        errorEl.classList.add('show');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'CONNECTING…';
+      errorEl.classList.remove('show');
+
+      try {
+        const api = new GtApi(key);
+        const company = await api.testKey();
+        GtApi.saveKey(key);
+        btn.textContent = `WELCOME, ${company.name.toUpperCase()}!`;
+        setTimeout(() => { window.location.href = 'dashboard.html'; }, 700);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'CONNECT';
+        let msg = err.message || 'Unknown error.';
+        if (msg.startsWith('AUTH_INVALID:'))       msg = 'Invalid API key. Please check and try again.';
+        else if (msg.startsWith('CORS_OR_NETWORK:')) msg = 'Cannot reach the GT API. Check your internet connection.';
+        else if (msg.startsWith('AUTH_INSUFFICIENT:')) msg = 'This key lacks Extended access. Generate an Extended key in-game.';
+        errorEl.textContent = msg;
+        errorEl.classList.add('show');
+      }
+    });
+
+    document.getElementById('api-key-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('connect-btn').click();
+    });
+  </script>
+</body>
+</html>

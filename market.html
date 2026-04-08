@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Market — GT Companion</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    .market-layout {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .market-layout { grid-template-columns: 1fr; } }
+
+    .chart-wrap { position: relative; height: 220px; }
+
+    .orders-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .orders-table th {
+      background: rgba(0,212,255,0.04);
+      color: var(--text-muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 9px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      font-weight: 700;
+      font-family: var(--font-display);
+    }
+    .orders-table td {
+      padding: 9px 14px;
+      border-bottom: 1px solid rgba(0,212,255,0.05);
+      color: var(--text);
+      transition: background 0.1s;
+    }
+    .orders-table tr:last-child td { border-bottom: none; }
+    .orders-table tbody tr:hover td { background: rgba(0,212,255,0.04); }
+    .your-order td { background: rgba(0,212,255,0.06) !important; }
+
+    #placeholder-card { padding: 60px; text-align: center; color: var(--text-muted); }
+    .results-col { display: none; }
+    .results-col.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div id="gt-nav"></div>
+
+  <div class="page-content">
+    <div class="page-header">
+      <div class="page-title">📈 Market Analysis</div>
+      <div class="page-subtitle">30-day price history, order book, and your contracts for any material.</div>
+    </div>
+
+    <div class="market-layout">
+      <!-- Left: search -->
+      <div>
+        <div class="card">
+          <div class="card-header"><div class="card-title">Search Material</div></div>
+          <div class="form-group" style="margin-bottom:12px">
+            <div class="autocomplete-wrap">
+              <input id="mat-search" type="text" class="form-input" placeholder="e.g. Polyethylene…" autocomplete="off">
+              <div id="autocomplete-list" class="autocomplete-list" style="display:none"></div>
+            </div>
+          </div>
+          <button id="fetch-btn" class="btn btn-primary" style="width:100%;justify-content:center" disabled>Fetch Market Data</button>
+          <div id="fetch-error" class="error-box" style="margin-top:10px;display:none"></div>
+        </div>
+
+        <!-- Quick stats (populated after fetch) -->
+        <div id="quick-stats" class="card" style="margin-top:12px;display:none">
+          <div class="card-header"><div class="card-title" id="qs-matname">—</div></div>
+          <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+            <div class="cost-row"><span class="cost-label">Current Price</span><span class="cost-value text-mono text-accent" id="qs-current">—</span></div>
+            <div class="cost-row"><span class="cost-label">30-day Avg</span><span class="cost-value text-mono" id="qs-avg">—</span></div>
+            <div class="cost-row"><span class="cost-label">Trend</span><span id="qs-trend">—</span></div>
+            <div class="cost-row"><span class="cost-label">Available Qty</span><span class="cost-value text-mono" id="qs-qty">—</span></div>
+            <div class="cost-row"><span class="cost-label">Avg Daily Volume</span><span class="cost-value text-mono" id="qs-vol">—</span></div>
+            <div class="cost-row"><span class="cost-label">Open Orders</span><span class="cost-value text-mono" id="qs-orders">—</span></div>
+          </div>
+        </div>
+
+        <!-- Your contracts for this material -->
+        <div id="your-contracts-card" class="card" style="margin-top:12px;display:none">
+          <div class="card-header"><div class="card-title">Your Contracts</div></div>
+          <div id="your-contracts-list"></div>
+        </div>
+      </div>
+
+      <!-- Right: charts and order book -->
+      <div>
+        <div id="placeholder-card" class="card">
+          <div style="font-size:48px;margin-bottom:12px">📈</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px">Search for a material</div>
+          <div style="font-size:12px">Enter any material name to see its 30-day price chart, order book, and how your contracts compare.</div>
+        </div>
+
+        <div id="results-col" class="results-col">
+          <!-- Price chart -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">30-Day Price History</div>
+              <div id="price-range" style="font-size:12px;color:var(--text-dim)"></div>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="price-chart"></canvas>
+            </div>
+          </div>
+
+          <!-- Volume chart -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header"><div class="card-title">Daily Volume Sold</div></div>
+            <div class="chart-wrap" style="height:140px">
+              <canvas id="volume-chart"></canvas>
+            </div>
+          </div>
+
+          <!-- Order book -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Order Book</div>
+              <span style="font-size:11px;color:var(--text-muted)">⭐ = your listing</span>
+            </div>
+            <div style="overflow-x:auto;border-radius:var(--radius);border:1px solid var(--border)">
+              <table class="orders-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Company</th>
+                    <th class="text-right">Unit Price</th>
+                    <th class="text-right">Qty Available</th>
+                    <th class="text-right">Total Value</th>
+                  </tr>
+                </thead>
+                <tbody id="orders-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/gamedata.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/market.js"></script>
+</body>
+</html>

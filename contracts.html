@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contracts — GT Companion</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    #contracts-table-wrap {
+      overflow-x: auto;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+    }
+    #contracts-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    #contracts-table th {
+      background: rgba(0,212,255,0.04);
+      color: var(--text-muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 11px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      font-weight: 700;
+      cursor: pointer;
+      user-select: none;
+      font-family: var(--font-display);
+    }
+    #contracts-table th:hover { color: var(--text); }
+    #contracts-table th.sorted-asc::after  { content: ' ↑'; color: var(--accent); }
+    #contracts-table th.sorted-desc::after { content: ' ↓'; color: var(--accent); }
+    #contracts-table td {
+      padding: 11px 16px;
+      border-bottom: 1px solid rgba(0,212,255,0.05);
+      color: var(--text);
+      vertical-align: middle;
+    }
+    #contracts-table tr:last-child td { border-bottom: none; }
+    #contracts-table tbody tr { transition: background 0.15s; }
+    #contracts-table tbody tr:hover { background: rgba(0,212,255,0.04); }
+  </style>
+</head>
+<body>
+  <div id="gt-nav"></div>
+
+  <div class="page-content">
+    <div class="page-header">
+      <div class="page-title">📋 Contract Monitor</div>
+      <div class="page-subtitle">All active, pending, and recent trade contracts. Flags issues and expiry warnings.</div>
+    </div>
+
+    <!-- Summary bar -->
+    <div class="summary-bar" id="summary-bar">
+      <div class="summary-item"><div class="s-label">Total Active</div><div class="s-value" id="s-total">—</div></div>
+      <div class="summary-item"><div class="s-label">Selling (outbound)</div><div class="s-value text-accent" id="s-sell">—</div></div>
+      <div class="summary-item"><div class="s-label">Buying (inbound)</div><div class="s-value text-gold" id="s-buy">—</div></div>
+      <div class="summary-item"><div class="s-label">Active Sell Value</div><div class="s-value text-green" id="s-sellval">—</div></div>
+      <div class="summary-item"><div class="s-label">Expiring &lt;24h</div><div class="s-value" id="s-exp" style="color:var(--yellow)">—</div></div>
+      <div class="summary-item"><div class="s-label">Issues</div><div class="s-value text-red" id="s-issues">—</div></div>
+      <div class="summary-item" style="margin-left:auto;align-items:flex-end">
+        <div class="refresh-bar"><div class="refresh-dot"></div><span style="font-size:11px;color:var(--text-muted)" id="c-refresh">Live</span></div>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filter-bar">
+      <div class="filter-group">
+        <label class="filter-label">Direction</label>
+        <select id="f-type" class="form-select" style="padding:8px 32px 8px 10px">
+          <option value="">All</option>
+          <option value="1">▶ Selling</option>
+          <option value="2">◀ Buying</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">Status</label>
+        <select id="f-status" class="form-select" style="padding:8px 32px 8px 10px">
+          <option value="">All</option>
+          <option value="active">Active</option>
+          <option value="pending">Pending</option>
+          <option value="expiring">Expiring &lt;24h</option>
+          <option value="issues">Issues Only</option>
+          <option value="done">Completed</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">Partner</label>
+        <select id="f-partner" class="form-select" style="padding:8px 32px 8px 10px">
+          <option value="">All Partners</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">Search Material</label>
+        <input id="f-material" type="text" class="form-input" placeholder="e.g. Iron Ore" style="padding:8px 12px">
+      </div>
+      <button id="f-reset" class="btn btn-ghost" style="align-self:flex-end;padding:8px 14px">Reset</button>
+      <button id="refresh-btn" class="btn btn-secondary" style="align-self:flex-end;padding:8px 14px">↻ Refresh</button>
+    </div>
+
+    <!-- Table -->
+    <div id="contracts-table-wrap">
+      <table id="contracts-table">
+        <thead>
+          <tr>
+            <th data-col="dir">Dir</th>
+            <th data-col="material">Material</th>
+            <th data-col="partner">Partner</th>
+            <th data-col="qty" class="text-right">Qty</th>
+            <th data-col="price" class="text-right">Unit Price</th>
+            <th data-col="vsmarket" class="text-right">vs Market</th>
+            <th data-col="value" class="text-right">Total Value</th>
+            <th data-col="fills" class="text-right">Fill Today</th>
+            <th data-col="expiry">Expiry</th>
+            <th data-col="status">Status</th>
+            <th>Flags</th>
+          </tr>
+        </thead>
+        <tbody id="contracts-tbody">
+          <tr><td colspan="11"><div class="loading-overlay"><div class="loading-spinner"></div><span>Loading contracts…</span></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="row-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;text-align:right"></div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/gamedata.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/contracts.js"></script>
+</body>
+</html>

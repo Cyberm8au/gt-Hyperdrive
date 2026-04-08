@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cost Calculator — GT Companion</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .calc-layout {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .calc-layout { grid-template-columns: 1fr; } }
+    .result-section { display: none; }
+    .result-section.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div id="gt-nav"></div>
+
+  <div class="page-content">
+    <div class="page-header">
+      <div class="page-title">🧮 Production Cost Calculator</div>
+      <div class="page-subtitle">Resolve full ingredient trees down to raw materials and calculate minimum profitable sell prices.</div>
+    </div>
+
+    <div class="calc-layout">
+      <!-- Left panel: inputs -->
+      <div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">What are you producing?</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Material</label>
+            <div class="autocomplete-wrap">
+              <input id="mat-search" type="text" class="form-input" placeholder="Search material name…" autocomplete="off">
+              <div id="autocomplete-list" class="autocomplete-list" style="display:none"></div>
+            </div>
+            <div id="selected-mat" style="margin-top:8px;font-size:12px;color:var(--text-dim)"></div>
+          </div>
+
+          <div id="recipe-selector" style="display:none;margin-bottom:16px">
+            <label class="form-label">Recipe / Building</label>
+            <div id="recipe-options"></div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Quantity to produce</label>
+            <input id="qty-input" type="number" class="form-input" value="1" min="1" max="999999">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Market Sell Margin</label>
+            <div class="slider-row">
+              <input id="margin-slider" type="range" class="form-range" min="0" max="100" value="15">
+              <span class="slider-value" id="margin-val">15%</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Markup above cost for open market listings</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Guild Member Price</label>
+            <div class="slider-row">
+              <input id="guild-slider" type="range" class="form-range" min="0" max="100" value="10">
+              <span class="slider-value" id="guild-val">10%</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Markup above cost for guild members (below market)</div>
+          </div>
+
+          <div style="display:flex;gap:8px">
+            <button id="calc-btn" class="btn btn-primary" style="flex:1;justify-content:center" disabled>
+              Calculate Cost
+            </button>
+            <button id="clear-btn" class="btn btn-ghost">Clear</button>
+          </div>
+
+          <div id="calc-error" class="error-box" style="margin-top:12px;display:none"></div>
+        </div>
+
+        <!-- Raw material price note -->
+        <div class="info-box" style="margin-top:12px;font-size:12px">
+          💡 Raw material costs use <strong>current exchange prices</strong>. Costs reflect what you'd pay buying inputs at market rate today.
+        </div>
+      </div>
+
+      <!-- Right panel: results -->
+      <div>
+        <!-- Placeholder before calculation -->
+        <div id="result-placeholder" class="card" style="padding:40px;text-align:center;color:var(--text-muted)">
+          <div style="font-size:48px;margin-bottom:12px">🧮</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px">Select a material to begin</div>
+          <div style="font-size:12px">Search for any material above, set your margins, and calculate the full production cost breakdown.</div>
+        </div>
+
+        <!-- Results (shown after calculation) -->
+        <div id="result-section" class="result-section">
+
+          <!-- Price summary -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">Price Summary — <span id="res-matname"></span> × <span id="res-qty"></span></div>
+            </div>
+
+            <div class="cost-row">
+              <span class="cost-label">Total raw material cost</span>
+              <span class="cost-value text-mono" id="res-totalcost">—</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">Cost per unit of output</span>
+              <span class="cost-value text-mono fw-700" id="res-unitcost">—</span>
+            </div>
+
+            <div class="price-comparison">
+              <div class="price-box breakeven">
+                <div class="pb-label">Break-Even</div>
+                <div class="pb-value" id="res-breakeven">—</div>
+                <div class="pb-sub">Sell at cost, zero profit</div>
+              </div>
+              <div class="price-box guild">
+                <div class="pb-label">Guild Price</div>
+                <div class="pb-value" id="res-guild">—</div>
+                <div class="pb-sub" id="res-guild-sub">at <span id="res-guild-pct">10</span>% margin</div>
+              </div>
+              <div class="price-box market">
+                <div class="pb-label">Market Price</div>
+                <div class="pb-value" id="res-market">—</div>
+                <div class="pb-sub" id="res-market-sub">at <span id="res-market-pct">15</span>% margin</div>
+              </div>
+              <div class="price-box current">
+                <div class="pb-label">Current Exchange</div>
+                <div class="pb-value" id="res-current">—</div>
+                <div class="pb-sub">Live market price</div>
+              </div>
+            </div>
+
+            <div class="margin-indicator" id="margin-indicator" style="display:none">
+              At current market price, you'd make
+              <span class="margin-pill" id="market-margin-pill">—</span>
+              profit margin
+              <span id="market-margin-desc" style="font-size:11px"></span>
+            </div>
+          </div>
+
+          <!-- Ingredient tree -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Ingredient Tree</div>
+              <button id="expand-all-btn" class="btn btn-ghost" style="padding:4px 10px;font-size:11px">Expand All</button>
+            </div>
+            <div style="margin-bottom:10px">
+              <div class="tree-row" style="font-size:10px;color:var(--text-muted);border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:4px">
+                <div class="left"><span style="min-width:160px">Material</span></div>
+                <div class="right">
+                  <span>Needed Qty</span>
+                  <span>Unit Price</span>
+                  <span>Subtotal</span>
+                </div>
+              </div>
+            </div>
+            <div id="ingredient-tree"></div>
+
+            <!-- Raw materials summary -->
+            <div id="raw-summary" style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px;display:none">
+              <div style="font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px">Raw Material Requirements</div>
+              <div id="raw-list"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/gamedata.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/cost-calc.js"></script>
+</body>
+</html>
