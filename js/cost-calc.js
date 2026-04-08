@@ -577,8 +577,9 @@
       allPrices = {};
       for (const p of pricesArr) allPrices[p.matId] = p.currentPrice / 100; // API stores as integer cents
 
-      // Kick off self-sufficiency fetch (don't block if it fails)
+      // Kick off self-sufficiency fetch and perk auto-load (don't block if they fail)
       maybeFetchEmpireProduced().catch(() => {});
+      await autoLoadPerksFromCompany().catch(() => {});
 
       // Compute cost tree
       const rawTotals = {};
@@ -608,6 +609,60 @@
     } finally {
       btn.disabled = false;
       btn.textContent = 'Calculate Cost';
+    }
+  }
+
+  // ─── Auto-populate perk settings from /public/company ─────────────────────
+  // CompanyPerkIdEnum mapping from swagger + observed per-level values
+  const PERK_ENUM = {
+    PRODUCTION_SPEED: 4,            // Workflow Optimization — +2%/lvl
+    WORKFORCE_CONSUMPTION: 7,       // Workforce Efficiency — -2%/lvl
+    OVERHEAD_REDUCTION: 8,          // Administrative Optimization — -2.5%/lvl
+    STRICT_OVERSIGHT: 20,           // keystone +50% overhead, +25% speed
+    LAX_OVERSIGHT: 21,              // -35%/lvl
+    EFFICIENT_OVERSIGHT: 26         // -5%/lvl
+  };
+
+  let perksAutoLoaded = false;
+  async function autoLoadPerksFromCompany() {
+    if (perksAutoLoaded) return;
+    try {
+      const company = await api.getCompany();
+      const perks = company?.perks;
+      if (!Array.isArray(perks)) { perksAutoLoaded = true; return; }
+
+      const byId = {};
+      for (const p of perks) byId[p.id] = p.lvl || 0;
+
+      settings.workforceEffLvl  = byId[PERK_ENUM.WORKFORCE_CONSUMPTION] || 0;
+      settings.adminOptLvl      = byId[PERK_ENUM.OVERHEAD_REDUCTION] || 0;
+      settings.efficientSupLvl  = byId[PERK_ENUM.EFFICIENT_OVERSIGHT] || 0;
+      settings.laxSupLvl        = byId[PERK_ENUM.LAX_OVERSIGHT] || 0;
+      settings.strictSup        = (byId[PERK_ENUM.STRICT_OVERSIGHT] || 0) > 0;
+      // Workflow Optimization = +2% production speed per level (observed: max 5 → +10%)
+      const speedLvl = byId[PERK_ENUM.PRODUCTION_SPEED] || 0;
+      // Only overwrite if user hasn't customised (still at default 0)
+      if (!settings.prodSpeedBonusPct) settings.prodSpeedBonusPct = speedLvl * 2;
+      saveSettings();
+
+      // Refresh settings panel inputs
+      const sync = (id, val) => { const e = document.getElementById(id); if (e) { if (e.type === 'checkbox') e.checked = !!val; else e.value = val; } };
+      sync('set-workforceEff', settings.workforceEffLvl);
+      sync('set-adminOpt', settings.adminOptLvl);
+      sync('set-efficientSup', settings.efficientSupLvl);
+      sync('set-laxSup', settings.laxSupLvl);
+      sync('set-strictSup', settings.strictSup);
+      sync('set-prodSpeed', settings.prodSpeedBonusPct);
+
+      const note = document.getElementById('perks-auto-note');
+      if (note) {
+        const count = perks.filter(p => p.lvl > 0).length;
+        note.textContent = `✓ Auto-loaded ${count} perk${count === 1 ? '' : 's'} from your company`;
+        note.style.color = 'var(--success, #2ecc71)';
+      }
+      perksAutoLoaded = true;
+    } catch (_) {
+      perksAutoLoaded = true;
     }
   }
 
