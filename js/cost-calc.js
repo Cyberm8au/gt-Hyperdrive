@@ -11,6 +11,7 @@
   let allPrices = {};       // matId → currentPrice (normalised, credits)
   let lastResult = null;    // { tree, rawTotals, totalCost, consumTotals, timeMinutes, topBuilding }
   let empireProduced = null; // Set<matId> produced by user's own bases
+  let companyTechnologies = null; // [{id,level}] from getCompany()
 
   // ─── Settings (persisted) ──────────────────────────────────────────────────
   // User-tunable values representing their company state. Auto-detection of
@@ -216,7 +217,14 @@
     const outAmt  = output?.amount || 1;
     const runs    = qty / outAmt;
     const building = gameData.getRecipeBuilding(recipe);
-    const speedMult = 1 + (settings.prodSpeedBonusPct || 0) / 100;
+    // Production speed: global setting × per-recipe technology bonus
+    // (technologies give +5% per level to buildings matching their specialization)
+    let techBonus = 0;
+    if (companyTechnologies && building?.specialization) {
+      const tech = companyTechnologies.find(t => t.id === building.specialization);
+      if (tech) techBonus = (tech.level || 0) * 0.05;
+    }
+    const speedMult = (1 + (settings.prodSpeedBonusPct || 0) / 100) * (1 + techBonus);
     const runMinutes = (recipe.timeMinutes || 0) / speedMult;
     const recipeTimeMinutes = runMinutes * runs;
     const recipeDurationDays = recipeTimeMinutes / 1440;
@@ -448,8 +456,16 @@
       : unitsPerDay > 0 ? unitsPerDay.toFixed(2) + ' / day' : '—';
     document.getElementById('tp-workers').innerHTML = workerLines || '<div style="color:var(--text-muted);font-size:11px">None</div>';
     const speed = settings.prodSpeedBonusPct;
-    document.getElementById('tp-speednote').textContent = speed > 0
-      ? `(Includes ${speed}% production-speed bonus from settings)`
+    let techBonus = 0;
+    if (companyTechnologies && b.specialization) {
+      const tech = companyTechnologies.find(t => t.id === b.specialization);
+      if (tech) techBonus = (tech.level || 0) * 5;
+    }
+    const parts = [];
+    if (speed > 0) parts.push(`${speed}% from settings`);
+    if (techBonus > 0) parts.push(`${techBonus}% from tech`);
+    document.getElementById('tp-speednote').textContent = parts.length
+      ? `(Includes ${parts.join(' + ')} production-speed bonus)`
       : '';
   }
 
@@ -577,8 +593,10 @@
       allPrices = {};
       for (const p of pricesArr) allPrices[p.matId] = p.currentPrice / 100; // API stores as integer cents
 
-      // Kick off self-sufficiency fetch and perk auto-load (don't block if they fail)
+      // Kick off self-sufficiency + burden fetch (non-blocking)
       maybeFetchEmpireProduced().catch(() => {});
+      autoLoadEmpireBurden().catch(() => {});
+      // Perks must be awaited so the current calc uses them
       await autoLoadPerksFromCompany().catch(() => {});
 
       // Compute cost tree
@@ -628,6 +646,13 @@
     if (perksAutoLoaded) return;
     try {
       const company = await api.getCompany();
+      // Stash technologies for per-recipe speed bonus lookup
+      if (Array.isArray(company?.technologies)) {
+        companyTechnologies = company.technologies.map(t => ({
+          id: typeof t.id === 'number' ? t.id : parseInt(t.id),
+          level: t.level || 0
+        }));
+      }
       const perks = company?.perks;
       if (!Array.isArray(perks)) { perksAutoLoaded = true; return; }
 
@@ -663,6 +688,41 @@
       perksAutoLoaded = true;
     } catch (_) {
       perksAutoLoaded = true;
+    }
+  }
+
+  // ─── Auto-compute empire burden from base workforce ──────────────────────
+
+  let burdenAutoLoaded = false;
+  async function autoLoadEmpireBurden() {
+    if (burdenAutoLoaded) return;
+    try {
+      const bases = await api.getBases();
+      const basesArr = Array.isArray(bases) ? bases : (bases.bases || []);
+      // Fetch each base in parallel
+      const details = await Promise.all(
+        basesArr.map(b => api.getBase(b.id).catch(() => null))
+      );
+      let burden = 0;
+      for (const d of details) {
+        const counts = d?.workforce?.workersCount;
+        if (!Array.isArray(counts)) continue;
+        burden += gameData.getBurdenForBuilding(counts);
+      }
+      if (burden > 0) {
+        settings.empireBurden = Math.round(burden);
+        saveSettings();
+        const el = document.getElementById('set-empireBurden');
+        if (el) el.value = settings.empireBurden;
+        const note = document.getElementById('burden-auto-note');
+        if (note) {
+          note.textContent = `✓ Auto-computed burden: ${burden.toLocaleString()} from ${details.filter(Boolean).length} bases`;
+          note.style.color = 'var(--success, #2ecc71)';
+        }
+      }
+      burdenAutoLoaded = true;
+    } catch (_) {
+      burdenAutoLoaded = true;
     }
   }
 
