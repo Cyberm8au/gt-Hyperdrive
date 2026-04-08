@@ -28,12 +28,23 @@
     empireBurden: 2000,        // Total empire workforce burden (Σ workers × burden)
     prodSpeedBonusPct: 0,      // Aggregate production-speed bonus from tech + perks (%)
     includeOptionals: false,   // Factor optional consumables in cost
-    includeConsumables: true   // Master toggle
+    includeConsumables: false  // Master toggle — off by default (see consumables-panel caveat)
   };
+  const SETTINGS_VERSION = 2; // bump to migrate / reset misleading defaults
   let settings = { ...DEFAULT_SETTINGS };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) settings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    if (raw) {
+      settings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      // Migration: v2 disables consumables by default since per-recipe
+      // attribution heavily inflates cost vs. how players actually budget.
+      if (!settings.__v || settings.__v < 2) {
+        settings.includeConsumables = false;
+        settings.__v = SETTINGS_VERSION;
+      }
+    } else {
+      settings.__v = SETTINGS_VERSION;
+    }
   } catch (_) {}
   function saveSettings() {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
