@@ -45,7 +45,7 @@
   // ─── Render company stats ──────────────────────────────────────────────────
 
   function renderCompanyStats(company) {
-    document.getElementById('stat-cash').textContent  = GtApi.formatCredits(company.cash);
+    document.getElementById('stat-cash').textContent  = GtApi.formatPrice(company.cash);
     document.getElementById('stat-rank').textContent  = `#${company.rank}`;
     document.getElementById('stat-pr').textContent    = `${GtApi.formatNum(company.pr)} PR`;
     document.getElementById('stat-stars').textContent = GtApi.formatNum(company.stars);
