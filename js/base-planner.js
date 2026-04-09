@@ -111,7 +111,7 @@
     return result;
   }
 
-  /** Build the childrenOf map from chainNodes (for cascading unselect) */
+  /** Build the childrenOf map from chainNodes */
   function buildChildMap() {
     childrenOf = {};
     for (const node of chainNodes) {
@@ -129,6 +129,52 @@
       }
     }
     return result;
+  }
+
+  /**
+   * DAG-aware cascade unselect: when unchecking `matId`, only uncheck
+   * descendants that are NOT reachable from any other still-checked node
+   * (or the target). This handles shared materials like Carbon which is
+   * needed by both Carbon Nanotubes and Aerogel.
+   */
+  function cascadeUnselect(matId) {
+    selfProduceSet.delete(matId);
+
+    // Get all descendants of the unchecked node
+    const descendants = getDescendants(matId);
+    if (descendants.size === 0) return;
+
+    // For each descendant, check if it's still reachable from the target
+    // through other checked nodes (not through the one we just unchecked)
+    const reachable = new Set();
+    function walkReachable(fromId, visited = new Set()) {
+      if (visited.has(fromId)) return;
+      visited.add(fromId);
+      const children = childrenOf[fromId] || [];
+      for (const childId of children) {
+        // Can only reach through nodes that are still selected (or target)
+        if (childId === matId) continue; // skip the node we just unchecked
+        const childInSet = selfProduceSet.has(childId);
+        if (childInSet || childId === selectedMatId) {
+          reachable.add(childId);
+          // Continue walking through this child's descendants
+          walkReachable(childId, visited);
+        }
+      }
+    }
+
+    // Start reachability walk from target and all still-checked nodes
+    walkReachable(selectedMatId);
+    for (const checkedId of selfProduceSet) {
+      if (checkedId !== matId) walkReachable(checkedId);
+    }
+
+    // Uncheck descendants that are no longer reachable
+    for (const descId of descendants) {
+      if (!reachable.has(descId)) {
+        selfProduceSet.delete(descId);
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -576,12 +622,9 @@
         if (cb.checked) {
           selfProduceSet.add(node.matId);
         } else {
-          // Cascading unselect: also unselect all descendants
-          selfProduceSet.delete(node.matId);
-          const descendants = getDescendants(node.matId);
-          for (const descId of descendants) {
-            selfProduceSet.delete(descId);
-          }
+          // DAG-aware cascade: only uncheck descendants that aren't
+          // reachable from another still-checked parent
+          cascadeUnselect(node.matId);
         }
         renderChainTree();
       });
@@ -590,18 +633,33 @@
     row.appendChild(content);
     container.appendChild(row);
 
-    // Render craftable children
+    // Render craftable children (collapsible)
     const craftableChildren = (node.craftableChildIds || [])
       .map(id => nodeMap.get(id))
       .filter(Boolean);
 
     if (craftableChildren.length > 0) {
+      // Add collapse/expand toggle to the content row
+      const toggle = document.createElement('button');
+      toggle.className = 'chain-toggle';
+      toggle.textContent = '▾';
+      toggle.title = 'Collapse';
+      content.insertBefore(toggle, content.firstChild);
+
       const childContainer = document.createElement('div');
       childContainer.className = 'chain-children';
       craftableChildren.forEach((child) => {
         renderChainNode(child, childContainer, nodeMap, rendered);
       });
       container.appendChild(childContainer);
+
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const collapsed = childContainer.style.display === 'none';
+        childContainer.style.display = collapsed ? '' : 'none';
+        toggle.textContent = collapsed ? '▾' : '▸';
+        toggle.title = collapsed ? 'Collapse' : 'Expand';
+      });
     }
   }
 
