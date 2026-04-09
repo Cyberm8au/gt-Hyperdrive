@@ -553,10 +553,27 @@
       }
     }
 
-    // Housing buildings needed
+    // Housing buildings needed — work from existing slots, upgrade/add as needed
     const housingBuildings = gameData.buildings.filter(b => b.workersHousing?.some(h => h > 0));
-    const idealHousing = [];
+    const tierNames = ['Workers', 'Technicians', 'Engineers', 'Scientists'];
+
+    // Index current housing by tier
+    const currentHousingByTier = {};
+    for (const s of baseSlots) {
+      if (!s.isHousing || !s.gdBuilding) continue;
+      for (let t = 0; t < 4; t++) {
+        if (s.gdBuilding.workersHousing[t] > 0) {
+          if (!currentHousingByTier[t]) currentHousingByTier[t] = { slots: [], totalLevel: 0, building: s.gdBuilding };
+          currentHousingByTier[t].slots.push(s);
+          currentHousingByTier[t].totalLevel += s.level;
+        }
+      }
+    }
+
+    const idealHousing = []; // per-tier plan: { building, tierIndex, plannedSlots: [{level, isNew, fromLevel}], ... }
     let idealHousingSlots = 0;
+    const MAX_LEVEL = 30;
+
     for (let tier = 0; tier < 4; tier++) {
       const needed = idealWorkerTotals[tier];
       if (needed <= 0) continue;
@@ -564,14 +581,45 @@
       if (!hb) continue;
       const capPerLvl = hb.workersHousing[tier];
       const levelsNeeded = Math.ceil(needed / capPerLvl);
-      const { slots } = distributeToSlots(levelsNeeded);
+
+      const cur = currentHousingByTier[tier];
+      const existingSlots = cur ? [...cur.slots].sort((a, b) => b.level - a.level) : [];
+      const plannedSlots = [];
+      let levelsAssigned = 0;
+
+      // First: upgrade existing housing slots towards what's needed
+      for (const es of existingSlots) {
+        if (levelsAssigned >= levelsNeeded) {
+          // Already have enough — keep existing slot as-is
+          plannedSlots.push({ level: es.level, isNew: false, fromLevel: es.level, slotId: es.slotId });
+          levelsAssigned += es.level;
+          continue;
+        }
+        // How much can this slot contribute?
+        const canAssign = Math.min(MAX_LEVEL, levelsNeeded - levelsAssigned);
+        const targetLvl = Math.max(es.level, canAssign);
+        plannedSlots.push({ level: targetLvl, isNew: false, fromLevel: es.level, slotId: es.slotId });
+        levelsAssigned += targetLvl;
+      }
+
+      // Second: add new housing slots if still short
+      let remaining = levelsNeeded - levelsAssigned;
+      while (remaining > 0) {
+        const lvl = Math.min(MAX_LEVEL, remaining);
+        plannedSlots.push({ level: lvl, isNew: true, fromLevel: 0 });
+        remaining -= lvl;
+        levelsAssigned += lvl;
+      }
+
+      const totalPlannedLvl = plannedSlots.reduce((s, p) => s + p.level, 0);
       idealHousing.push({
         building: hb, buildingType: hb.id, buildingName: hb.name,
-        tierIndex: tier, slots, slotCount: slots.length,
-        workersHoused: slots.reduce((s, l) => s + l, 0) * capPerLvl,
+        tierIndex: tier, plannedSlots, slotCount: plannedSlots.length,
+        capPerLvl,
+        workersHoused: totalPlannedLvl * capPerLvl,
         workersNeeded: needed
       });
-      idealHousingSlots += slots.length;
+      idealHousingSlots += plannedSlots.length;
     }
 
     // Step 5: generate recommendations by comparing current vs ideal
@@ -678,58 +726,42 @@
       }
     }
 
-    // Housing recommendations
-    const currentHousingByTier = {};
-    for (const s of baseSlots) {
-      if (!s.isHousing || !s.gdBuilding) continue;
-      for (let t = 0; t < 4; t++) {
-        if (s.gdBuilding.workersHousing[t] > 0) {
-          if (!currentHousingByTier[t]) currentHousingByTier[t] = { slots: [], totalLevel: 0, building: s.gdBuilding };
-          currentHousingByTier[t].slots.push(s);
-          currentHousingByTier[t].totalLevel += s.level;
-        }
-      }
-    }
-
-    const tierNames = ['Workers', 'Technicians', 'Engineers', 'Scientists'];
+    // Housing recommendations — per-slot with specific level targets and capacity
     for (const ih of idealHousing) {
-      const cur = currentHousingByTier[ih.tierIndex];
-      const curTotalLvl = cur?.totalLevel || 0;
-      const idealTotalLvl = ih.slots.reduce((s, l) => s + l, 0);
+      const tn = tierNames[ih.tierIndex];
+      const cap = ih.capPerLvl;
 
-      if (curTotalLvl < idealTotalLvl) {
-        const deficit = idealTotalLvl - curTotalLvl;
-        const fromLvl = cur?.slots?.length ? Math.max(...cur.slots.map(s => s.level)) : 0;
-        const growth = cur?.slots?.length
-          ? upgradeCostGrowth(fromLvl, fromLvl + deficit)
-          : buildCostGrowth(idealTotalLvl);
-        const cost = estimateCreditCost(ih.building, growth);
-
-        if (cur && cur.slots.length > 0) {
+      for (const ps of ih.plannedSlots) {
+        const housed = ps.level * cap;
+        if (ps.isNew) {
+          // Brand new housing building
+          const g = buildCostGrowth(ps.level);
+          const c = estimateCreditCost(ih.building, g);
           recommendations.push({
             type: 'housing',
-            title: `Upgrade ${ih.buildingName} (+${deficit} levels)`,
-            detail: `Need ${idealTotalLvl} total levels for ${ih.workersNeeded.toLocaleString()} ${tierNames[ih.tierIndex]}. Currently at ${curTotalLvl}.`,
-            costCredits: cost, costGrowth: growth
+            title: `Build ${ih.buildingName} (Lv ${ps.level})`,
+            detail: `Houses ${housed.toLocaleString()} ${tn} (${cap}/level). Need ${ih.workersNeeded.toLocaleString()} total.`,
+            costCredits: c, costGrowth: g
           });
-        } else {
-          for (const lvl of ih.slots) {
-            const g = buildCostGrowth(lvl);
-            const c = estimateCreditCost(ih.building, g);
-            recommendations.push({
-              type: 'housing',
-              title: `Build ${ih.buildingName} (Lv ${lvl})`,
-              detail: `Houses ${tierNames[ih.tierIndex]} — need ${ih.workersNeeded.toLocaleString()} total.`,
-              costCredits: c, costGrowth: g
-            });
-          }
+        } else if (ps.level > ps.fromLevel) {
+          // Upgrade existing housing
+          const g = upgradeCostGrowth(ps.fromLevel, ps.level);
+          const c = estimateCreditCost(ih.building, g);
+          const prevHoused = ps.fromLevel * cap;
+          recommendations.push({
+            type: 'housing',
+            title: `Upgrade ${ih.buildingName} Lv ${ps.fromLevel} → Lv ${ps.level}`,
+            detail: `Slot #${ps.slotId}: ${tn} housing ${prevHoused.toLocaleString()} → ${housed.toLocaleString()} (+${((ps.level - ps.fromLevel) * cap).toLocaleString()}).`,
+            costCredits: c, costGrowth: g
+          });
         }
-      }
+        // else: existing slot already at or above needed level — no recommendation
 
-      for (const lvl of ih.slots) {
         proposedSlots.push({
-          buildingName: ih.buildingName, level: lvl, isHousing: true,
-          isNew: !cur, recipe: `${tierNames[ih.tierIndex]} housing`,
+          buildingName: ih.buildingName, level: ps.level, isHousing: true,
+          isNew: ps.isNew,
+          wasUpgraded: !ps.isNew && ps.level > ps.fromLevel,
+          recipe: `${housed.toLocaleString()} ${tn}`,
           buildingType: ih.buildingType
         });
       }
