@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Base Optimizer — GT Companion</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .opt-layout {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .opt-layout { grid-template-columns: 1fr; } }
+    .result-section { display: none; }
+    .result-section.visible { display: block; }
+
+    /* Current base snapshot */
+    .slot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 8px;
+    }
+    .slot-card {
+      background: var(--bg-card2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    .slot-card.slot-empty { opacity: 0.4; }
+    .slot-card.slot-housing { border-left: 3px solid var(--purple); }
+    .slot-card.slot-production { border-left: 3px solid var(--accent); }
+    .slot-card.slot-hq { border-left: 3px solid var(--gold); }
+    .slot-card .slot-name { font-weight: 600; font-size: 12px; }
+    .slot-card .slot-detail { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+    .slot-card .slot-level { font-family: var(--font-mono); color: var(--accent); font-weight: 700; }
+    .slot-card .slot-recipe { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+
+    /* Recommendation cards */
+    .rec-card {
+      background: var(--bg-card2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+    .rec-card.rec-upgrade { border-left: 3px solid var(--green); }
+    .rec-card.rec-build { border-left: 3px solid var(--accent); }
+    .rec-card.rec-scrap { border-left: 3px solid var(--red); }
+    .rec-card.rec-housing { border-left: 3px solid var(--purple); }
+    .rec-card.rec-reorder { border-left: 3px solid var(--yellow); }
+    .rec-card .rec-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+    .rec-card .rec-detail { font-size: 11px; color: var(--text-dim); }
+    .rec-card .rec-impact { font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+
+    /* Target product tags */
+    .target-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .target-tag {
+      display: flex; align-items: center; gap: 4px;
+      background: rgba(0,180,255,0.1); border: 1px solid var(--border);
+      border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 12px;
+    }
+    .target-tag .tag-remove {
+      cursor: pointer; color: var(--red); font-size: 14px; line-height: 1;
+      margin-left: 4px;
+    }
+    .target-tag .tag-remove:hover { color: #ff8888; }
+
+    /* Comparison table */
+    .compare-row {
+      display: grid;
+      grid-template-columns: 1fr 100px 30px 100px;
+      gap: 8px; padding: 5px 0;
+      font-size: 12px; align-items: center;
+      border-bottom: 1px solid rgba(0,180,255,0.05);
+    }
+    .compare-row:last-child { border-bottom: none; }
+    .compare-row .cr-label { color: var(--text-dim); }
+    .compare-row .cr-current { text-align: right; font-family: var(--font-mono); }
+    .compare-row .cr-arrow { text-align: center; color: var(--text-muted); }
+    .compare-row .cr-proposed { text-align: right; font-family: var(--font-mono); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="gt-nav"></div>
+
+  <div class="page-content">
+    <div class="page-header">
+      <div class="page-title">🔧 Base Optimizer</div>
+      <div class="page-subtitle">Load an existing base and get optimization recommendations for target products.</div>
+    </div>
+
+    <div class="opt-layout">
+      <!-- Left panel -->
+      <div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Select Base</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Your Bases</label>
+            <select id="bo-base-select" class="form-input">
+              <option value="">Loading bases…</option>
+            </select>
+          </div>
+          <button id="bo-load-btn" class="btn btn-primary" style="width:100%;justify-content:center" disabled>
+            Load Base
+          </button>
+          <div id="bo-load-error" class="error-box" style="margin-top:12px;display:none"></div>
+        </div>
+
+        <!-- Target products -->
+        <div id="bo-targets-panel" class="card" style="margin-top:12px;display:none">
+          <div class="card-header">
+            <div class="card-title">Target Products</div>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+            What do you want this base to produce? Add one or more target materials.
+          </div>
+          <div class="form-group">
+            <div class="autocomplete-wrap">
+              <input id="bo-product-search" type="text" class="form-input" placeholder="Search material…" autocomplete="off">
+              <div id="bo-autocomplete-list" class="autocomplete-list" style="display:none"></div>
+            </div>
+          </div>
+          <div id="bo-target-tags" class="target-tags"></div>
+
+          <div style="margin-top:12px">
+            <button id="bo-optimize-btn" class="btn btn-primary" style="width:100%;justify-content:center" disabled>
+              Optimize Base
+            </button>
+          </div>
+          <div id="bo-opt-error" class="error-box" style="margin-top:12px;display:none"></div>
+        </div>
+
+        <div class="info-box" style="margin-top:12px;font-size:12px">
+          💡 The optimizer compares your current base layout against an ideal configuration for your target products and suggests specific changes.
+        </div>
+      </div>
+
+      <!-- Right panel -->
+      <div>
+        <!-- Placeholder -->
+        <div id="bo-placeholder" class="card" style="padding:40px;text-align:center;color:var(--text-muted)">
+          <div style="font-size:48px;margin-bottom:12px">🔧</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px">Select a base to begin</div>
+          <div style="font-size:12px">Choose one of your bases, then set target products. The optimizer will suggest building changes, upgrades, and reconfigurations.</div>
+        </div>
+
+        <!-- Current base snapshot -->
+        <div id="bo-snapshot" class="result-section">
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">📍 Current Base — <span id="bo-base-name"></span></div>
+            </div>
+            <div class="plan-summary-grid" id="bo-base-summary"></div>
+          </div>
+
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">🏗 Building Slots</div>
+            </div>
+            <div id="bo-slot-grid" class="slot-grid"></div>
+          </div>
+        </div>
+
+        <!-- Optimization results -->
+        <div id="bo-result-section" class="result-section">
+          <!-- Before/After comparison -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">📊 Before → After</div>
+            </div>
+            <div id="bo-comparison"></div>
+          </div>
+
+          <!-- Recommendations -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">🎯 Recommendations</div>
+              <span id="bo-rec-count" style="font-size:11px;color:var(--text-dim)"></span>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px">
+              Step-by-step changes to optimize this base for your target products.
+            </div>
+            <div id="bo-rec-list"></div>
+          </div>
+
+          <!-- Proposed layout -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">🏭 Proposed Layout</div>
+            </div>
+            <div id="bo-proposed-slots" class="slot-grid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/gamedata.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/base-optimizer.js"></script>
+</body>
+</html>

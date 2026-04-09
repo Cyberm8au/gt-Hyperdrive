@@ -8,6 +8,7 @@
     { href: 'contracts.html', label: '📋 Contracts' },
     { href: 'cost-calc.html', label: '🧮 Cost Calc' },
     { href: 'base-planner.html', label: '🏗 Base Planner' },
+    { href: 'base-optimizer.html', label: '🔧 Optimizer' },
     { href: 'market.html',    label: '📈 Market' },
   ];
 
