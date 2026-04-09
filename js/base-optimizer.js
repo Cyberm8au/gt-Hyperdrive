@@ -95,6 +95,9 @@
           : null;
         const isHousing = gdBuilding?.workersHousing?.some(h => h > 0);
         const isHQ = b.type === 9;
+        // Warehouse = no recipes, no housing, not HQ (building 14, but detect generically)
+        const isWarehouse = !isHQ && !isHousing &&
+          (!gdBuilding?.recipesIds || gdBuilding.recipesIds.length === 0);
 
         return {
           slotId: slot.id,
@@ -106,6 +109,7 @@
           condition: b.cond,
           isHousing,
           isHQ,
+          isWarehouse,
           gdBuilding,
           activeRecipeId: b.task?.rId || null,
           recipeName,
@@ -152,8 +156,9 @@
     const usedSlots = baseSlots.filter(s => !s.empty).length;
     const emptySlots = baseSlots.filter(s => s.empty && s.status === 1).length;
     const debrisSlots = baseSlots.filter(s => s.status === 3).length;
-    const prodSlots = baseSlots.filter(s => !s.empty && !s.isHousing && !s.isHQ);
+    const prodSlots = baseSlots.filter(s => !s.empty && !s.isHousing && !s.isHQ && !s.isWarehouse);
     const housingSlots = baseSlots.filter(s => s.isHousing);
+    const warehouseSlots = baseSlots.filter(s => s.isWarehouse);
 
     // Current products being made
     const currentProducts = new Set();
@@ -183,9 +188,14 @@
         <div class="psb-sub">${housingSlots.map(h => `Lv${h.level}`).join(', ') || '—'}</div>
       </div>
       <div class="plan-stat-box">
-        <div class="psb-label">Warehouse</div>
+        <div class="psb-label">Warehouses</div>
+        <div class="psb-value">${warehouseSlots.length}</div>
+        <div class="psb-sub">${warehouseSlots.map(h => `Lv${h.level}`).join(', ') || '—'} (${GtApi.formatNum(wh.cap || 0)}t)</div>
+      </div>
+      <div class="plan-stat-box">
+        <div class="psb-label">Storage</div>
         <div class="psb-value">${whPct}%</div>
-        <div class="psb-sub">${GtApi.formatNum(whUsed)}/${GtApi.formatNum(wh.cap || 0)}</div>
+        <div class="psb-sub">${GtApi.formatNum(whUsed)}/${GtApi.formatNum(wh.cap || 0)}t</div>
       </div>
     `;
 
@@ -195,7 +205,7 @@
         const label = s.status === 3 ? 'Debris' : s.status === 4 ? 'Premium (locked)' : 'Empty';
         return `<div class="slot-card slot-empty"><div class="slot-name">${label}</div><div class="slot-detail">Slot #${s.slotId}</div></div>`;
       }
-      const cls = s.isHQ ? 'slot-hq' : s.isHousing ? 'slot-housing' : 'slot-production';
+      const cls = s.isHQ ? 'slot-hq' : s.isHousing ? 'slot-housing' : s.isWarehouse ? 'slot-warehouse' : 'slot-production';
       const condPct = Math.round((s.condition || 0) * 100);
       const condColor = condPct < 60 ? 'var(--red)' : condPct < 85 ? 'var(--yellow)' : 'var(--green)';
       return `
@@ -351,6 +361,86 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // §5b — Upgrade cost helpers
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Growth factor for upgrading TO currentLevel (wiki formula) */
+  function upgradeGrowth(currentLevel) {
+    if (currentLevel <= 0) return 1;
+    if (currentLevel <= 8)
+      return (0.1 * currentLevel) + Math.pow(1.07, currentLevel);
+    return 0.7 + Math.pow(1.07, 7) +
+      Math.pow(currentLevel - 6, 1.03) -
+      0.95 * (currentLevel - 6);
+  }
+
+  /** Total growth cost to upgrade from fromLvl to toLvl (sum of each step) */
+  function upgradeCostGrowth(fromLvl, toLvl) {
+    let total = 0;
+    for (let lvl = fromLvl + 1; lvl <= toLvl; lvl++) total += upgradeGrowth(lvl);
+    return total;
+  }
+
+  /** Build cost growth for a brand-new building up to level */
+  function buildCostGrowth(level) {
+    let total = 1; // new build = growth 1
+    for (let lvl = 2; lvl <= level; lvl++) total += upgradeGrowth(lvl);
+    return total;
+  }
+
+  /**
+   * Estimate credit cost of a growth factor using building construction materials.
+   * cost = Σ( ceil(baseMat × growth) × matPrice )
+   */
+  function estimateCreditCost(building, growthFactor) {
+    const mats = building?.constructionMaterials || [];
+    let total = 0;
+    for (const m of mats) {
+      const baseAmt = m.am || m.a || 0;
+      const qty = Math.ceil(baseAmt * growthFactor);
+      const matId = m.id || m.i;
+      const price = allPrices[matId] || (gameData.getMaterial(matId)?.cp || 0) / 100;
+      total += qty * price;
+    }
+    return total;
+  }
+
+  /**
+   * Calculate daily warehouse throughput weight for a set of production entries.
+   * Returns { dailyInputWeight, dailyOutputWeight, dailyNetWeight, peakWeight }
+   */
+  function calcWarehouseThroughput(idealEntries, allChainNodes, selfSet) {
+    let dailyInputWeight = 0;
+    let dailyOutputWeight = 0;
+
+    for (const entry of idealEntries) {
+      const node = allChainNodes.find(n => n.matId === entry.matId);
+      if (!node) continue;
+      const runsPerDay = 1440 / node.timeMinutes;
+      const totalLvl = entry.idealTotalLevel || 1;
+      const dailyRuns = runsPerDay * totalLvl;
+
+      // Output weight
+      const outMat = gameData.getMaterial(entry.matId);
+      const outWeight = (outMat?.weight || 1) * (node.outAmount || 1) * dailyRuns;
+      dailyOutputWeight += outWeight;
+
+      // Input weights (only for bought inputs, not self-produced)
+      for (const inp of node.inputs) {
+        if (selfSet.has(inp.matId)) continue; // produced on-base, flows internally
+        const inpMat = gameData.getMaterial(inp.matId);
+        const inpWeight = (inpMat?.weight || 1) * inp.amount * dailyRuns;
+        dailyInputWeight += inpWeight;
+      }
+    }
+
+    // Peak weight: inputs arrive in bulk (assume 1-day buffer) + outputs accumulate
+    // until sold/shipped (assume 1-day buffer)
+    const peakWeight = dailyInputWeight + dailyOutputWeight;
+    return { dailyInputWeight, dailyOutputWeight, peakWeight };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // §6 — Optimization engine
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -369,7 +459,7 @@
     // Step 1: determine current production capabilities
     const currentProdByType = {}; // buildingType → { count, totalLevel, slots: [{level, recipeId}] }
     for (const s of baseSlots) {
-      if (s.empty || s.isHousing || s.isHQ) continue;
+      if (s.empty || s.isHousing || s.isHQ || s.isWarehouse) continue;
       const bt = s.buildingType;
       if (!currentProdByType[bt]) currentProdByType[bt] = { count: 0, totalLevel: 0, slots: [] };
       currentProdByType[bt].count++;
@@ -495,12 +585,15 @@
       if (!current) {
         // Need to build this building type (doesn't exist yet)
         for (const lvl of ideal.idealSlots) {
+          const growth = buildCostGrowth(lvl);
+          const cost = estimateCreditCost(ideal.building, growth);
           recommendations.push({
             type: 'build',
             title: `Build ${ideal.buildingName}`,
             detail: `Build to Lv ${lvl} for ${ideal.matName} production.`,
             building: ideal.buildingName,
-            targetLevel: lvl
+            targetLevel: lvl,
+            costCredits: cost, costGrowth: growth
           });
           proposedSlots.push({
             buildingName: ideal.buildingName, level: lvl, isHousing: false,
@@ -519,18 +612,19 @@
           const idealLvl = idealLevels[i];
 
           if (cur && idealLvl) {
-            // Both exist — check if upgrade needed
             if (cur.level < idealLvl) {
+              const growth = upgradeCostGrowth(cur.level, idealLvl);
+              const cost = estimateCreditCost(ideal.building, growth);
+              const outputGain = idealLvl - cur.level; // L1-equivalents gained
               recommendations.push({
                 type: 'upgrade',
                 title: `Upgrade ${ideal.buildingName} Lv ${cur.level} → Lv ${idealLvl}`,
-                detail: `Slot #${cur.slotId}: upgrade from level ${cur.level} to ${idealLvl} for ${ideal.matName}.`,
+                detail: `Slot #${cur.slotId}: +${outputGain} level${outputGain > 1 ? 's' : ''} output for ${ideal.matName}.`,
                 building: ideal.buildingName,
-                fromLevel: cur.level, targetLevel: idealLvl
+                fromLevel: cur.level, targetLevel: idealLvl,
+                costCredits: cost, costGrowth: growth,
+                costPerLevel: cost / outputGain
               });
-            } else if (cur.level > idealLvl + 5) {
-              // Significantly over-leveled — note but don't scrap (excess is fine)
-              // No recommendation needed
             }
             proposedSlots.push({
               buildingName: ideal.buildingName, level: Math.max(cur.level, idealLvl),
@@ -538,12 +632,14 @@
               buildingType: ideal.buildingType, wasUpgraded: cur.level < idealLvl
             });
           } else if (!cur && idealLvl) {
-            // Need more slots of this type
+            const growth = buildCostGrowth(idealLvl);
+            const cost = estimateCreditCost(ideal.building, growth);
             recommendations.push({
               type: 'build',
               title: `Build additional ${ideal.buildingName}`,
               detail: `Build to Lv ${idealLvl} for ${ideal.matName}.`,
-              building: ideal.buildingName, targetLevel: idealLvl
+              building: ideal.buildingName, targetLevel: idealLvl,
+              costCredits: cost, costGrowth: growth
             });
             proposedSlots.push({
               buildingName: ideal.buildingName, level: idealLvl,
@@ -551,7 +647,6 @@
               buildingType: ideal.buildingType
             });
           } else if (cur && !idealLvl) {
-            // Extra slot of this type — keep it (might be useful)
             proposedSlots.push({
               buildingName: ideal.buildingName, level: cur.level,
               isHousing: false, isNew: false, recipe: ideal.matName || 'existing',
@@ -564,16 +659,16 @@
 
     // Check for buildings on base that aren't in the ideal plan at all
     for (const s of baseSlots) {
-      if (s.empty || s.isHQ || s.isHousing) continue;
+      if (s.empty || s.isHQ || s.isHousing || s.isWarehouse) continue;
       const isInIdeal = idealEntries.some(e => e.buildingType === s.buildingType);
       if (!isInIdeal) {
-        // This building isn't needed for target products
         const outputName = s.recipeName || 'unknown';
         recommendations.push({
           type: 'scrap',
           title: `Consider scrapping ${s.buildingName} (Lv ${s.level})`,
-          detail: `Slot #${s.slotId}: currently producing ${outputName}. Not needed for target products. Scrap to free a slot, or keep if you want to continue producing ${outputName}.`,
-          building: s.buildingName, level: s.level
+          detail: `Slot #${s.slotId}: producing ${outputName}. Not needed for targets — scrap to free a slot.`,
+          building: s.buildingName, level: s.level,
+          costCredits: 0, costGrowth: 0
         });
         proposedSlots.push({
           buildingName: s.buildingName, level: s.level,
@@ -604,20 +699,28 @@
 
       if (curTotalLvl < idealTotalLvl) {
         const deficit = idealTotalLvl - curTotalLvl;
+        const fromLvl = cur?.slots?.length ? Math.max(...cur.slots.map(s => s.level)) : 0;
+        const growth = cur?.slots?.length
+          ? upgradeCostGrowth(fromLvl, fromLvl + deficit)
+          : buildCostGrowth(idealTotalLvl);
+        const cost = estimateCreditCost(ih.building, growth);
+
         if (cur && cur.slots.length > 0) {
-          // Upgrade existing housing
           recommendations.push({
             type: 'housing',
-            title: `Upgrade ${ih.buildingName} housing (+${deficit} levels)`,
-            detail: `Need ${idealTotalLvl} total levels for ${ih.workersNeeded.toLocaleString()} ${tierNames[ih.tierIndex]}. Currently at ${curTotalLvl} levels.`,
+            title: `Upgrade ${ih.buildingName} (+${deficit} levels)`,
+            detail: `Need ${idealTotalLvl} total levels for ${ih.workersNeeded.toLocaleString()} ${tierNames[ih.tierIndex]}. Currently at ${curTotalLvl}.`,
+            costCredits: cost, costGrowth: growth
           });
         } else {
-          // Build new housing
           for (const lvl of ih.slots) {
+            const g = buildCostGrowth(lvl);
+            const c = estimateCreditCost(ih.building, g);
             recommendations.push({
               type: 'housing',
               title: `Build ${ih.buildingName} (Lv ${lvl})`,
               detail: `Houses ${tierNames[ih.tierIndex]} — need ${ih.workersNeeded.toLocaleString()} total.`,
+              costCredits: c, costGrowth: g
             });
           }
         }
@@ -632,6 +735,71 @@
       }
     }
 
+    // ── Warehouse analysis ──────────────────────────────────────────────────
+    const WH_CAP_PER_LEVEL = 1500; // 1500t per warehouse level
+    const warehouseBuilding = gameData.buildings.find(b => b.id === 14);
+    const currentWhSlots = baseSlots.filter(s => s.isWarehouse);
+    const currentWhTotalLevel = currentWhSlots.reduce((s, w) => s + w.level, 0);
+    const currentWhCapacity = currentBase.warehouse?.cap || (currentWhTotalLevel * WH_CAP_PER_LEVEL);
+
+    // Calculate daily throughput weight
+    const throughput = calcWarehouseThroughput(idealEntries, allChainNodes, selfSet);
+
+    // We need enough capacity for at least ~1 day buffer of inputs + outputs
+    // A safe margin is 2× daily peak to handle delivery timing
+    const safeCapacity = Math.ceil(throughput.peakWeight * 2);
+    const idealWhLevels = Math.max(1, Math.ceil(safeCapacity / WH_CAP_PER_LEVEL));
+    const { slots: idealWhSlots } = distributeToSlots(idealWhLevels);
+    let idealWhSlotsCount = idealWhSlots.length;
+
+    // Warehouse recommendations
+    if (currentWhTotalLevel < idealWhLevels && warehouseBuilding) {
+      const deficit = idealWhLevels - currentWhTotalLevel;
+      if (currentWhSlots.length > 0) {
+        // Upgrade existing warehouses
+        const topLvl = Math.max(...currentWhSlots.map(s => s.level));
+        const growth = upgradeCostGrowth(topLvl, topLvl + deficit);
+        const cost = estimateCreditCost(warehouseBuilding, growth);
+        recommendations.push({
+          type: 'warehouse',
+          title: `Upgrade Warehouse (+${deficit} levels)`,
+          detail: `Need ~${GtApi.formatNum(safeCapacity)}t capacity for daily throughput (${GtApi.formatNum(Math.round(throughput.peakWeight))}t/day). Currently ${GtApi.formatNum(currentWhCapacity)}t.`,
+          costCredits: cost, costGrowth: growth
+        });
+      } else {
+        // Build new warehouse
+        for (const lvl of idealWhSlots) {
+          const g = buildCostGrowth(lvl);
+          const c = estimateCreditCost(warehouseBuilding, g);
+          recommendations.push({
+            type: 'warehouse',
+            title: `Build Warehouse (Lv ${lvl})`,
+            detail: `Need ~${GtApi.formatNum(safeCapacity)}t capacity. Daily throughput: ${GtApi.formatNum(Math.round(throughput.dailyInputWeight))}t in + ${GtApi.formatNum(Math.round(throughput.dailyOutputWeight))}t out.`,
+            costCredits: c, costGrowth: g
+          });
+        }
+      }
+    } else if (currentWhTotalLevel > idealWhLevels + 5) {
+      // Warehouse is much bigger than needed — note as potential savings
+      const excess = currentWhTotalLevel - idealWhLevels;
+      recommendations.push({
+        type: 'info',
+        title: `Warehouse over-provisioned by ~${excess} levels`,
+        detail: `Current: ${GtApi.formatNum(currentWhCapacity)}t, needed: ~${GtApi.formatNum(safeCapacity)}t. Could downgrade to free a slot if tight on space.`,
+        costCredits: 0, costGrowth: 0
+      });
+    }
+
+    // Add current/ideal warehouses to proposed layout
+    for (const lvl of idealWhSlots) {
+      proposedSlots.push({
+        buildingName: 'Warehouse', level: lvl, isWarehouse: true,
+        isNew: currentWhSlots.length === 0,
+        recipe: `${GtApi.formatNum(lvl * WH_CAP_PER_LEVEL)}t storage`,
+        buildingType: 14
+      });
+    }
+
     // Add HQ to proposed
     for (const s of baseSlots) {
       if (s.isHQ) {
@@ -642,7 +810,7 @@
       }
     }
 
-    // Production order recommendations
+    // Production order recommendations (no cost — just queue changes)
     const currentRecipes = new Set();
     for (const s of baseSlots) {
       if (s.activeRecipeId) currentRecipes.add(s.activeRecipeId);
@@ -653,15 +821,35 @@
           type: 'reorder',
           title: `Set production: ${ideal.matName}`,
           detail: `Add ${ideal.matName} recipe to ${ideal.buildingName} production queue.`,
+          costCredits: 0, costGrowth: 0
         });
       }
     }
 
-    // Sort recommendations: scrap first, then build, upgrade, housing, reorder
-    const order = { scrap: 0, build: 1, upgrade: 2, housing: 3, reorder: 4 };
-    recommendations.sort((a, b) => (order[a.type] ?? 5) - (order[b.type] ?? 5));
+    // ── Cost-efficiency sort ────────────────────────────────────────────────
+    // Primary: by priority class, secondary: by cost-efficiency (cheapest first)
+    const order = { scrap: 0, reorder: 1, upgrade: 2, build: 3, housing: 4, warehouse: 5, info: 6 };
+    recommendations.sort((a, b) => {
+      const oa = order[a.type] ?? 7, ob = order[b.type] ?? 7;
+      if (oa !== ob) return oa - ob;
+      // Within same type, cheapest first (best ROI)
+      return (a.costCredits || 0) - (b.costCredits || 0);
+    });
 
-    return { recommendations, proposedSlots, idealEntries, idealHousing, idealWorkerTotals };
+    // Compute total upgrade cost across all recommendations
+    const totalUpgradeCost = recommendations.reduce((s, r) => s + (r.costCredits || 0), 0);
+
+    return {
+      recommendations, proposedSlots, idealEntries, idealHousing,
+      idealWorkerTotals, throughput, totalUpgradeCost,
+      warehouseAnalysis: {
+        currentCapacity: currentWhCapacity,
+        idealCapacity: idealWhLevels * WH_CAP_PER_LEVEL,
+        dailyInputWeight: throughput.dailyInputWeight,
+        dailyOutputWeight: throughput.dailyOutputWeight,
+        peakWeight: throughput.peakWeight
+      }
+    };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -695,27 +883,34 @@
   }
 
   function renderOptimizationResults(result) {
-    const { recommendations, proposedSlots, idealWorkerTotals } = result;
+    const { recommendations, proposedSlots, idealWorkerTotals,
+            totalUpgradeCost, warehouseAnalysis } = result;
 
     // Current stats
-    const curProdSlots = baseSlots.filter(s => !s.empty && !s.isHousing && !s.isHQ).length;
+    const curProdSlots = baseSlots.filter(s => !s.empty && !s.isHousing && !s.isHQ && !s.isWarehouse).length;
     const curHousingSlots = baseSlots.filter(s => s.isHousing).length;
-    const curWorkers = (currentBase.workforce?.workersCount || [0,0,0,0]).reduce((a, b) => a + b, 0);
+    const curWhSlots = baseSlots.filter(s => s.isWarehouse).length;
     const curWorkerArr = currentBase.workforce?.workersCount || [0,0,0,0];
+    const curWorkers = curWorkerArr.reduce((a, b) => a + b, 0);
     const burdenWeights = [1.0, 1.5, 2.5, 4.0];
     const curBurden = curWorkerArr.reduce((s, w, i) => s + w * burdenWeights[i], 0);
 
     // Proposed stats
-    const propProdSlots = proposedSlots.filter(s => !s.isHousing && !s.isHQ).length;
+    const propProdSlots = proposedSlots.filter(s => !s.isHousing && !s.isHQ && !s.isWarehouse).length;
     const propHousingSlots = proposedSlots.filter(s => s.isHousing).length;
+    const propWhSlots = proposedSlots.filter(s => s.isWarehouse).length;
     const propWorkers = idealWorkerTotals.reduce((a, b) => a + b, 0);
     const propBurden = idealWorkerTotals.reduce((s, w, i) => s + w * burdenWeights[i], 0);
+    const totalProposedSlots = proposedSlots.length;
+    const totalBaseSlots = baseSlots.length;
 
     const newBuilds = recommendations.filter(r => r.type === 'build').length;
     const upgrades = recommendations.filter(r => r.type === 'upgrade').length;
     const scraps = recommendations.filter(r => r.type === 'scrap').length;
 
-    // Comparison
+    const fmtCost = (v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v.toFixed(0);
+
+    // Comparison table
     document.getElementById('bo-comparison').innerHTML = `
       <div class="compare-row">
         <div class="cr-label">Production slots</div>
@@ -730,6 +925,24 @@
         <div class="cr-proposed">${propHousingSlots}</div>
       </div>
       <div class="compare-row">
+        <div class="cr-label">Warehouse slots</div>
+        <div class="cr-current">${curWhSlots}</div>
+        <div class="cr-arrow">→</div>
+        <div class="cr-proposed">${propWhSlots}</div>
+      </div>
+      <div class="compare-row">
+        <div class="cr-label">Warehouse capacity</div>
+        <div class="cr-current">${GtApi.formatNum(warehouseAnalysis.currentCapacity)}t</div>
+        <div class="cr-arrow">→</div>
+        <div class="cr-proposed">${GtApi.formatNum(warehouseAnalysis.idealCapacity)}t</div>
+      </div>
+      <div class="compare-row">
+        <div class="cr-label">Daily throughput</div>
+        <div class="cr-current" style="font-family:var(--font);color:var(--text-dim)">—</div>
+        <div class="cr-arrow"></div>
+        <div class="cr-proposed" style="font-family:var(--font)">${GtApi.formatNum(Math.round(warehouseAnalysis.dailyInputWeight))}t in / ${GtApi.formatNum(Math.round(warehouseAnalysis.dailyOutputWeight))}t out</div>
+      </div>
+      <div class="compare-row">
         <div class="cr-label">Total workers</div>
         <div class="cr-current">${curWorkers.toLocaleString()}</div>
         <div class="cr-arrow">→</div>
@@ -742,14 +955,34 @@
         <div class="cr-proposed" style="color:${propBurden > 2000 ? 'var(--orange)' : 'var(--green)'}">${propBurden.toLocaleString()}</div>
       </div>
       <div class="compare-row">
+        <div class="cr-label">Total slots used</div>
+        <div class="cr-current">${baseSlots.filter(s => !s.empty).length}/${totalBaseSlots}</div>
+        <div class="cr-arrow">→</div>
+        <div class="cr-proposed" style="color:${totalProposedSlots > totalBaseSlots ? 'var(--red)' : 'var(--green)'}">${totalProposedSlots}/${totalBaseSlots}</div>
+      </div>
+      <div class="compare-row">
         <div class="cr-label">Changes</div>
         <div class="cr-current" style="font-family:var(--font);color:var(--text-dim)">current</div>
         <div class="cr-arrow">→</div>
-        <div class="cr-proposed" style="font-family:var(--font)">${newBuilds} new, ${upgrades} upgrades, ${scraps} scrap candidates</div>
+        <div class="cr-proposed" style="font-family:var(--font)">${newBuilds} new, ${upgrades} upgrades, ${scraps} scrap</div>
+      </div>
+      <div class="compare-row" style="border-top:1px solid rgba(0,180,255,0.15);padding-top:8px;margin-top:4px">
+        <div class="cr-label" style="font-weight:bold">Est. total cost</div>
+        <div class="cr-current"></div>
+        <div class="cr-arrow"></div>
+        <div class="cr-proposed" style="color:var(--accent);font-weight:bold;font-size:15px">${fmtCost(totalUpgradeCost)} cr</div>
       </div>
     `;
 
-    // Recommendations
+    // Slot overflow warning
+    if (totalProposedSlots > totalBaseSlots) {
+      const overflowEl = document.createElement('div');
+      overflowEl.style.cssText = 'color:var(--red);font-size:12px;padding:8px 12px;background:rgba(255,80,80,0.08);border:1px solid rgba(255,80,80,0.2);border-radius:6px;margin-top:8px';
+      overflowEl.textContent = `⚠ Proposed layout needs ${totalProposedSlots} slots but base only has ${totalBaseSlots}. Consider scrapping unused buildings or reducing target products.`;
+      document.getElementById('bo-comparison').appendChild(overflowEl);
+    }
+
+    // Recommendations (with cost)
     document.getElementById('bo-rec-count').textContent = `${recommendations.length} recommendations`;
     const recList = document.getElementById('bo-rec-list');
 
@@ -758,10 +991,11 @@
     } else {
       recList.innerHTML = recommendations.map(r => {
         const cls = `rec-${r.type}`;
-        const icon = { scrap: '🗑', build: '🏗', upgrade: '⬆', housing: '🏠', reorder: '📦' }[r.type] || '•';
+        const icon = { scrap: '🗑', build: '🏗', upgrade: '⬆', housing: '🏠', warehouse: '📦', reorder: '🔄', info: 'ℹ️' }[r.type] || '•';
+        const costStr = r.costCredits ? `<span class="rec-cost">${fmtCost(r.costCredits)} cr</span>` : '';
         return `
           <div class="rec-card ${cls}">
-            <div class="rec-title">${icon} ${r.title}</div>
+            <div class="rec-title">${icon} ${r.title}${costStr}</div>
             <div class="rec-detail">${r.detail}</div>
           </div>
         `;
@@ -773,6 +1007,7 @@
     propGrid.innerHTML = proposedSlots.map(s => {
       let cls = 'slot-production';
       if (s.isHousing) cls = 'slot-housing';
+      if (s.isWarehouse) cls = 'slot-warehouse';
       if (s.isHQ) cls = 'slot-hq';
 
       let border = '';

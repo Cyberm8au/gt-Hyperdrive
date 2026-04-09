@@ -33,6 +33,7 @@
     .slot-card.slot-housing { border-left: 3px solid var(--purple); }
     .slot-card.slot-production { border-left: 3px solid var(--accent); }
     .slot-card.slot-hq { border-left: 3px solid var(--gold); }
+    .slot-card.slot-warehouse { border-left: 3px solid var(--orange, #f0a030); }
     .slot-card .slot-name { font-weight: 600; font-size: 12px; }
     .slot-card .slot-detail { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
     .slot-card .slot-level { font-family: var(--font-mono); color: var(--accent); font-weight: 700; }
@@ -51,8 +52,11 @@
     .rec-card.rec-scrap { border-left: 3px solid var(--red); }
     .rec-card.rec-housing { border-left: 3px solid var(--purple); }
     .rec-card.rec-reorder { border-left: 3px solid var(--yellow); }
-    .rec-card .rec-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+    .rec-card.rec-warehouse { border-left: 3px solid var(--orange, #f0a030); }
+    .rec-card.rec-info { border-left: 3px solid var(--text-dim); opacity: 0.8; }
+    .rec-card .rec-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
     .rec-card .rec-detail { font-size: 11px; color: var(--text-dim); }
+    .rec-card .rec-cost { font-size: 10px; font-weight: normal; color: var(--accent); background: rgba(0,180,255,0.08); padding: 1px 6px; border-radius: 3px; margin-left: auto; white-space: nowrap; }
     .rec-card .rec-impact { font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
 
     /* Target product tags */
