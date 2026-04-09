@@ -30,8 +30,9 @@
   let selectedMatId = null;
   let selectedRecipe = null;
   let allPrices = {};        // matId → price in credits (not cents)
-  let chainNodes = [];       // flat list of { matId, recipe, building, depth, parentMatId }
+  let chainNodes = [];       // flat list of { matId, recipe, building, depth, parentMatId, childMatIds }
   let selfProduceSet = new Set(); // matIds the user wants to self-produce
+  let childrenOf = {};       // matId → [childMatIds] for cascading unselect
 
   // ═══════════════════════════════════════════════════════════════════════════
   // §1 — Rational number helper (BigInt-based, exact arithmetic)
@@ -67,11 +68,12 @@
   /**
    * Walk the recipe DAG from `matId` and build a flat list of all craftable
    * intermediates with their recipes/buildings, down to raw materials.
-   * Returns array of { matId, matName, recipe, building, inputs, outAmount, depth }.
+   * Returns array of { matId, matName, recipe, building, inputs, outAmount, depth, parentMatId }.
    * Each matId appears at most once (deduped). Raw materials (no recipe) are NOT
    * included — they go into the buy-list.
+   * Also builds `childrenOf` map for cascading unselect and tree lines.
    */
-  function resolveChain(matId, topRecipe = null, depth = 0, visited = new Set(), result = []) {
+  function resolveChain(matId, topRecipe = null, depth = 0, visited = new Set(), result = [], parentMatId = null) {
     if (visited.has(matId)) return result;
     visited.add(matId);
 
@@ -82,6 +84,13 @@
     const output   = gameData.getRecipeOutput(recipe);
     const inputs   = gameData.getRecipeInputs(recipe);
 
+    // Track which craftable children this node has
+    const craftableChildIds = [];
+    for (const inp of inputs) {
+      const childRecipe = gameData.getCraftingRecipe(inp.matId);
+      if (childRecipe) craftableChildIds.push(inp.matId);
+    }
+
     result.push({
       matId,
       matName: gameData.getMaterialName(matId),
@@ -90,13 +99,35 @@
       inputs,
       outAmount: output?.amount || 1,
       timeMinutes: recipe.timeMinutes || 1,
-      depth
+      depth,
+      parentMatId,
+      craftableChildIds
     });
 
     for (const inp of inputs) {
-      resolveChain(inp.matId, null, depth + 1, visited, result);
+      resolveChain(inp.matId, null, depth + 1, visited, result, matId);
     }
 
+    return result;
+  }
+
+  /** Build the childrenOf map from chainNodes (for cascading unselect) */
+  function buildChildMap() {
+    childrenOf = {};
+    for (const node of chainNodes) {
+      childrenOf[node.matId] = node.craftableChildIds || [];
+    }
+  }
+
+  /** Get all descendants of a matId in the chain */
+  function getDescendants(matId, result = new Set()) {
+    const children = childrenOf[matId] || [];
+    for (const childId of children) {
+      if (!result.has(childId)) {
+        result.add(childId);
+        getDescendants(childId, result);
+      }
+    }
     return result;
   }
 
@@ -197,9 +228,13 @@
       const neededPerDay = runsPerDayFloat * node.outAmount;
       const excessPerDay = outputPerDay - neededPerDay;
 
-      // Workers: each building slot uses the same workers regardless of level
+      // Workers: level-N building needs N× the base workers per slot
       const wn = node.building?.workersNeeded || [0,0,0,0];
-      const totalWorkers = wn.map(w => w * slotCount);
+      const totalWorkers = wn.map(w => {
+        let sum = 0;
+        for (const lvl of slots) sum += w * lvl;
+        return sum;
+      });
 
       plan.push({
         matId,
@@ -459,6 +494,7 @@
     if (!selectedMatId || !selectedRecipe) return;
 
     chainNodes = resolveChain(selectedMatId, selectedRecipe);
+    buildChildMap();
     // Auto-select: by default self-produce everything except raw materials
     selfProduceSet = new Set(chainNodes.filter(n => n.matId !== selectedMatId).map(n => n.matId));
 
@@ -468,49 +504,104 @@
     panel.style.display = 'block';
   }
 
+  /**
+   * Render the chain as a visual tree with connector lines.
+   * Each material renders fully only once (first occurrence). If the same
+   * material appears as a child of multiple parents, subsequent occurrences
+   * show a compact reference ("→ see above").
+   */
   function renderChainTree() {
     const container = document.getElementById('bp-chain-tree');
     container.innerHTML = '';
 
-    for (const node of chainNodes) {
-      const isTarget = node.matId === selectedMatId;
-      const isSelf   = isTarget || selfProduceSet.has(node.matId);
-      const indent   = node.depth * 20;
+    const nodeMap = new Map();
+    for (const node of chainNodes) nodeMap.set(node.matId, node);
 
-      const div = document.createElement('div');
-      div.className = 'chain-node';
-      div.style.paddingLeft = indent + 'px';
+    const root = chainNodes[0];
+    if (!root) return;
 
-      if (isTarget) {
-        div.innerHTML = `
+    const rendered = new Set(); // track which matIds already have full render
+    renderChainNode(root, container, nodeMap, rendered);
+  }
+
+  function renderChainNode(node, container, nodeMap, rendered) {
+    const isTarget = node.matId === selectedMatId;
+    const isSelf   = isTarget || selfProduceSet.has(node.matId);
+
+    // If already rendered elsewhere in the tree, show a compact reference
+    if (!isTarget && rendered.has(node.matId)) {
+      const ref = document.createElement('div');
+      ref.className = 'chain-node';
+      ref.innerHTML = `
+        <div class="chain-node-content chain-ref">
           <span class="mat-tier-badge">T${gameData.getMaterialTier(node.matId)}</span>
-          <strong>${node.matName}</strong>
-          <span class="building-tag">(${node.building?.name || '?'})</span>
-          <span class="chain-self">TARGET</span>
-        `;
-      } else {
-        const id = `bp-chain-${node.matId}`;
-        div.innerHTML = `
-          <label>
-            <input type="checkbox" id="${id}" ${isSelf ? 'checked' : ''}>
-            <span class="mat-tier-badge">T${gameData.getMaterialTier(node.matId)}</span>
-            ${node.matName}
-          </label>
-          <span class="building-tag">(${node.building?.name || '?'})</span>
-          ${isSelf
-            ? '<span class="chain-self">self-produce</span>'
-            : '<span class="chain-buy">buy</span>'}
-        `;
+          <span style="color:var(--text-dim)">${node.matName}</span>
+          <span style="font-size:10px;color:var(--text-muted);font-style:italic">↑ see above</span>
+        </div>
+      `;
+      container.appendChild(ref);
+      return;
+    }
+    rendered.add(node.matId);
 
-        const cb = div.querySelector('input');
-        cb.addEventListener('change', () => {
-          if (cb.checked) selfProduceSet.add(node.matId);
-          else selfProduceSet.delete(node.matId);
-          renderChainTree(); // re-render to update labels
-        });
-      }
+    const row = document.createElement('div');
+    row.className = 'chain-node';
 
-      container.appendChild(div);
+    const content = document.createElement('div');
+    content.className = 'chain-node-content';
+
+    if (isTarget) {
+      content.innerHTML = `
+        <span class="mat-tier-badge">T${gameData.getMaterialTier(node.matId)}</span>
+        <strong>${node.matName}</strong>
+        <span class="building-tag">(${node.building?.name || '?'})</span>
+        <span class="chain-self">TARGET</span>
+      `;
+    } else {
+      const id = `bp-chain-${node.matId}`;
+      content.innerHTML = `
+        <label>
+          <input type="checkbox" id="${id}" ${isSelf ? 'checked' : ''}>
+          <span class="mat-tier-badge">T${gameData.getMaterialTier(node.matId)}</span>
+          ${node.matName}
+        </label>
+        <span class="building-tag">(${node.building?.name || '?'})</span>
+        ${isSelf
+          ? '<span class="chain-self">self-produce</span>'
+          : '<span class="chain-buy">buy</span>'}
+      `;
+
+      const cb = content.querySelector('input');
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          selfProduceSet.add(node.matId);
+        } else {
+          // Cascading unselect: also unselect all descendants
+          selfProduceSet.delete(node.matId);
+          const descendants = getDescendants(node.matId);
+          for (const descId of descendants) {
+            selfProduceSet.delete(descId);
+          }
+        }
+        renderChainTree();
+      });
+    }
+
+    row.appendChild(content);
+    container.appendChild(row);
+
+    // Render craftable children
+    const craftableChildren = (node.craftableChildIds || [])
+      .map(id => nodeMap.get(id))
+      .filter(Boolean);
+
+    if (craftableChildren.length > 0) {
+      const childContainer = document.createElement('div');
+      childContainer.className = 'chain-children';
+      craftableChildren.forEach((child) => {
+        renderChainNode(child, childContainer, nodeMap, rendered);
+      });
+      container.appendChild(childContainer);
     }
   }
 
@@ -580,27 +671,90 @@
   // §8 — Render results
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /**
+   * Compute housing buildings needed for the given worker totals.
+   * Housing buildings (from gamedata):
+   *   Colony Barracks (id 4):    125 Workers/level
+   *   Residential Complex (21):  100 Technicians/level
+   *   Comfort Quarters (22):     80 Engineers/level
+   *   Stellar Suites (23):       70 Scientists/level
+   * Returns array of { building, slotCount, slots[], workersHoused[4] }
+   */
+  function computeHousing(workerTotals) {
+    // Find housing buildings from gamedata
+    const housingBuildings = gameData.buildings.filter(b =>
+      b.workersHousing && b.workersHousing.some(h => h > 0)
+    );
+
+    const result = [];
+    const tierLabels = ['Workers', 'Technicians', 'Engineers', 'Scientists'];
+
+    for (let tier = 0; tier < 4; tier++) {
+      const needed = workerTotals[tier];
+      if (needed <= 0) continue;
+
+      // Find the housing building for this tier
+      const hb = housingBuildings.find(b => b.workersHousing[tier] > 0);
+      if (!hb) continue;
+
+      const capacityPerLevel = hb.workersHousing[tier]; // per level of the building
+
+      // Total levels needed across all slots
+      const levelsNeeded = Math.ceil(needed / capacityPerLevel);
+      const { slots, totalLevel } = distributeToSlots(levelsNeeded);
+
+      result.push({
+        building: hb,
+        buildingName: hb.name,
+        tierIndex: tier,
+        tierName: tierLabels[tier],
+        slotCount: slots.length,
+        slots,
+        totalLevel,
+        workersNeeded: needed,
+        workersHoused: totalLevel * capacityPerLevel,
+        capacityPerLevel
+      });
+    }
+
+    return result;
+  }
+
   function renderPlanResults(plan, buyList, targetRate, totalSlots, prodSlots, slotWarning) {
     const matName = gameData.getMaterialName(selectedMatId);
     document.getElementById('bp-res-name').textContent = `${matName} @ ${targetRate}/day`;
 
-    // Worker totals
+    // Worker totals (level-scaled)
     const workerTotals = [0, 0, 0, 0];
     for (const entry of plan) {
       for (let i = 0; i < 4; i++) workerTotals[i] += entry.workersNeeded[i];
     }
     const totalWorkers = workerTotals.reduce((a, b) => a + b, 0);
 
-    // Burden
+    // Compute housing
+    const housing = computeHousing(workerTotals);
+    const housingSlots = housing.reduce((s, h) => s + h.slotCount, 0);
+
+    // Burden (workers × burden weight)
     const burdenWeights = [1.0, 1.5, 2.5, 4.0];
     const burden = workerTotals.reduce((s, w, i) => s + w * burdenWeights[i], 0);
 
-    // Total build cost (using slots with levels)
+    // Total build cost (production + housing)
     let totalBuildCost = 0;
     for (const entry of plan) {
       const cost = estimateBuildCost(entry.building, entry.slots);
       totalBuildCost += cost.totalCredits;
     }
+    let housingBuildCost = 0;
+    for (const h of housing) {
+      const cost = estimateBuildCost(h.building, h.slots);
+      housingBuildCost += cost.totalCredits;
+    }
+    totalBuildCost += housingBuildCost;
+
+    // Total slots = production + housing
+    const grandTotalSlots = totalSlots + housingSlots;
+    const maxSlots = parseInt(document.getElementById('bp-max-slots').value) || 25;
 
     // Daily buy cost
     const dailyBuyCost = buyList.reduce((s, b) => s + b.costPerDay, 0);
@@ -612,12 +766,16 @@
 
     // Summary grid
     const summaryGrid = document.getElementById('bp-summary-grid');
-    const slotsColor = totalSlots > prodSlots ? 'var(--red)' : 'var(--green)';
+    const slotsColor = grandTotalSlots > maxSlots ? 'var(--red)' : 'var(--green)';
+    // Clear any previous warnings
+    const prevWarning = summaryGrid.parentElement.querySelector('.error-box');
+    if (prevWarning) prevWarning.remove();
+
     summaryGrid.innerHTML = `
       <div class="plan-stat-box">
-        <div class="psb-label">Building Slots</div>
-        <div class="psb-value" style="color:${slotsColor}">${totalSlots}</div>
-        <div class="psb-sub">of ${prodSlots} prod slots</div>
+        <div class="psb-label">Total Slots</div>
+        <div class="psb-value" style="color:${slotsColor}">${grandTotalSlots}</div>
+        <div class="psb-sub">${totalSlots} prod + ${housingSlots} housing</div>
       </div>
       <div class="plan-stat-box">
         <div class="psb-label">Workers</div>
@@ -627,7 +785,7 @@
       <div class="plan-stat-box">
         <div class="psb-label">Build Cost</div>
         <div class="psb-value" style="color:var(--gold)">${GtApi.formatCredits(totalBuildCost)}</div>
-        <div class="psb-sub">construction materials</div>
+        <div class="psb-sub">prod + housing</div>
       </div>
       <div class="plan-stat-box">
         <div class="psb-label">Daily Input Cost</div>
@@ -646,19 +804,22 @@
       </div>
     `;
 
-    if (slotWarning) {
+    if (grandTotalSlots > maxSlots) {
+      summaryGrid.insertAdjacentHTML('afterend',
+        `<div class="error-box" style="margin-top:12px">⚠ Plan requires ${grandTotalSlots} total slots (${totalSlots} production + ${housingSlots} housing) but base has ${maxSlots} slots. Reduce target rate or buy more intermediates.</div>`
+      );
+    } else if (slotWarning) {
       summaryGrid.insertAdjacentHTML('afterend',
         `<div class="error-box" style="margin-top:12px">${slotWarning}</div>`
       );
     }
 
-    // Building list
+    // Building list — production buildings
     const buildingList = document.getElementById('bp-building-list');
-    buildingList.innerHTML = plan.map(entry => {
+    const prodRows = plan.map(entry => {
       const cost = estimateBuildCost(entry.building, entry.slots);
       const wStr = entry.workersNeeded.map((w, i) => w > 0 ? `${w}${['W','T','E','S'][i]}` : '').filter(Boolean).join(' ');
 
-      // Format slot levels: if all same → "3 slots @ Lv 9", else list them
       const allSame = entry.slots.every(l => l === entry.slots[0]);
       let levelStr;
       if (entry.slotCount === 1) {
@@ -683,11 +844,48 @@
       `;
     }).join('');
 
+    // Housing buildings
+    const housingRows = housing.map(h => {
+      const cost = estimateBuildCost(h.building, h.slots);
+      const allSame = h.slots.every(l => l === h.slots[0]);
+      let levelStr;
+      if (h.slotCount === 1) {
+        levelStr = `1 slot @ Lv ${h.slots[0]}`;
+      } else if (allSame) {
+        levelStr = `${h.slotCount} slots @ Lv ${h.slots[0]}`;
+      } else {
+        levelStr = `${h.slotCount} slots (Lv ${h.slots.join(', ')})`;
+      }
+
+      return `
+        <div class="plan-building-row" style="border-left:3px solid var(--purple);padding-left:8px">
+          <div>
+            <div class="bld-name">${h.buildingName}</div>
+            <div style="font-size:10px;color:var(--text-muted)">🏠 Houses ${h.workersHoused.toLocaleString()} ${h.tierName} (need ${h.workersNeeded.toLocaleString()})</div>
+            <div style="font-size:10px;color:var(--accent-dim)">${levelStr} — ${h.capacityPerLevel}/level capacity</div>
+          </div>
+          <div class="bld-count">${h.slotCount} slots</div>
+          <div class="bld-workers">—</div>
+          <div class="bld-cost">${GtApi.formatCredits(cost.totalCredits)}</div>
+        </div>
+      `;
+    }).join('');
+
+    buildingList.innerHTML = prodRows
+      + (housingRows ? `<div style="font-size:10px;font-weight:700;color:var(--purple);text-transform:uppercase;letter-spacing:0.5px;padding:10px 0 4px;border-top:1px solid var(--border);margin-top:8px">Housing Buildings</div>` + housingRows : '');
+
     // Worker summary
     const tierLabels = ['Workers', 'Technicians', 'Engineers', 'Scientists'];
-    document.getElementById('bp-worker-summary').innerHTML = workerTotals.map((w, i) =>
-      w > 0 ? `<div class="worker-summary-row"><span class="ws-tier">${tierLabels[i]}</span><span class="ws-count">${w.toLocaleString()}</span></div>` : ''
-    ).join('');
+    const housingByTier = {};
+    for (const h of housing) housingByTier[h.tierIndex] = h;
+
+    document.getElementById('bp-worker-summary').innerHTML = workerTotals.map((w, i) => {
+      if (w <= 0) return '';
+      const h = housingByTier[i];
+      const housed = h ? h.workersHoused : 0;
+      const housingNote = h ? ` / ${housed.toLocaleString()} housed` : '';
+      return `<div class="worker-summary-row"><span class="ws-tier">${tierLabels[i]}</span><span class="ws-count">${w.toLocaleString()}${housingNote}</span></div>`;
+    }).join('');
     document.getElementById('bp-burden-info').textContent =
       `Total burden: ${burden.toLocaleString()} (threshold: 2,000 — ${burden > 2000 ? 'overhead applies!' : 'below threshold'})`;
 
@@ -786,10 +984,12 @@
 
     const tierLabels = ['W', 'T', 'E', 'S'];
     const workerStr = workerTotals.map((w, i) => w > 0 ? `${w}${tierLabels[i]}` : '').filter(Boolean).join(' + ');
-    const totalSlots = plan.reduce((s, e) => s + e.slotCount, 0);
+    const prodSlots = plan.reduce((s, e) => s + e.slotCount, 0);
+    const housing = computeHousing(workerTotals);
+    const housingSlots = housing.reduce((s, h) => s + h.slotCount, 0);
 
     let text = `# Base Plan: ${matName} @ ${targetRate}/day\n\n`;
-    text += `## Buildings (${totalSlots} slots)\n`;
+    text += `## Production Buildings (${prodSlots} slots)\n`;
     for (const entry of plan) {
       const allSame = entry.slots.every(l => l === entry.slots[0]);
       const lvlStr = entry.slotCount === 1
@@ -799,7 +999,19 @@
           : `Lv ${entry.slots.join(', ')}`;
       text += `- ${entry.slotCount}× ${entry.buildingName} (${lvlStr}) → ${entry.matName}\n`;
     }
-    text += `\n## Workers: ${workerStr}\n`;
+    if (housing.length > 0) {
+      text += `\n## Housing (${housingSlots} slots)\n`;
+      for (const h of housing) {
+        const allSame = h.slots.every(l => l === h.slots[0]);
+        const lvlStr = h.slotCount === 1
+          ? `Lv ${h.slots[0]}`
+          : allSame
+            ? `${h.slotCount}× Lv ${h.slots[0]}`
+            : `Lv ${h.slots.join(', ')}`;
+        text += `- ${h.slotCount}× ${h.buildingName} (${lvlStr}) — ${h.workersHoused} ${h.tierName}\n`;
+      }
+    }
+    text += `\n## Workers: ${workerStr} (${prodSlots + housingSlots} total slots)\n`;
     if (buyList.length > 0) {
       text += `\n## Daily Inputs (buy)\n`;
       for (const b of buyList) {

@@ -16,25 +16,45 @@
     .result-section { display: none; }
     .result-section.visible { display: block; }
 
-    /* Chain tree tickboxes */
+    /* Chain tree with connector lines */
     .chain-node {
+      position: relative;
+      padding: 3px 0;
+      font-size: 13px;
+    }
+    .chain-node-content {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 4px 0;
-      font-size: 13px;
+      padding: 3px 6px;
+      border-radius: 4px;
+      transition: background 0.15s;
     }
-    .chain-node .chain-indent {
-      display: inline-block;
-      width: 20px;
-      border-left: 1px solid var(--border);
-      margin-left: 10px;
+    .chain-node-content:hover {
+      background: rgba(0,180,255,0.05);
     }
     .chain-node label {
       display: flex;
       align-items: center;
       gap: 6px;
       cursor: pointer;
+    }
+    .chain-children {
+      margin-left: 16px;
+      padding-left: 16px;
+      border-left: 2px solid rgba(0,180,255,0.15);
+    }
+    .chain-children .chain-node {
+      position: relative;
+    }
+    .chain-children .chain-node::before {
+      content: '';
+      position: absolute;
+      left: -16px;
+      top: 14px;
+      width: 14px;
+      height: 0;
+      border-top: 2px solid rgba(0,180,255,0.15);
     }
     .chain-node .chain-buy {
       font-size: 10px;
@@ -61,6 +81,9 @@
     .chain-node .building-tag {
       font-size: 10px;
       color: var(--text-dim);
+    }
+    .chain-node-content.chain-ref {
+      opacity: 0.5;
     }
 
     /* Plan output */
@@ -231,9 +254,9 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label">Reserved slots (housing + warehouse)</label>
-            <input id="bp-reserved-slots" type="number" class="form-input" value="3" min="0" max="20">
-            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Slots reserved for housing & storage (not production)</div>
+            <label class="form-label">Reserved slots (warehouse, etc.)</label>
+            <input id="bp-reserved-slots" type="number" class="form-input" value="2" min="0" max="20">
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Slots for warehouse and other non-production buildings (housing is auto-calculated)</div>
           </div>
 
           <div style="display:flex;gap:8px;margin-top:12px">
