@@ -156,18 +156,20 @@
 
   /**
    * Scale rational runs/day to a target daily output and compute building
-   * counts (each building does 1440/timeMinutes runs per day).
+   * slots with levels. A level-N building does N× output per run in the
+   * same time (wiki: "level-N building uses N× inputs, produces N× outputs,
+   * same time"). So instead of 53 level-1 buildings, you might need 5 slots
+   * at levels ~10-11.
    *
-   * Returns array of plan entries:
-   *  { matId, matName, building, buildingCount, runsPerDayNeeded, runsPerDayActual,
-   *    excessPerDay, workersNeeded[4], recipe }
+   * Strategy: for each building type, compute the "effective level-1
+   * equivalents" needed, then distribute across the minimum number of
+   * building slots, spreading levels as evenly as possible.
+   *
+   * Returns array of plan entries with `slots` array instead of flat count.
    */
-  function computePlan(targetMatId, ratioMap, targetRate) {
+  function computePlan(targetMatId, ratioMap, targetRate, prodSlots) {
     const plan = [];
 
-    // Scale factor: targetRate units/day of output.
-    // The target node produces outAmount per run, and we had runsPerDay
-    // normalised to producing 1 unit/day. So scale = targetRate.
     const scale = Rat.from(targetRate);
 
     for (const [matId, node] of ratioMap) {
@@ -176,30 +178,38 @@
       const runsPerDayNeeded = node.runsPerDay.mul(scale);
       const runsPerDayFloat  = runsPerDayNeeded.toFloat();
 
-      // Each building instance does 1440/timeMinutes runs/day
-      const runsPerBuildingPerDay = 1440 / node.timeMinutes;
-      const buildingsExact = runsPerDayFloat / runsPerBuildingPerDay;
-      const buildingCount  = Math.ceil(buildingsExact);
+      // Each level-1 building does 1440/timeMinutes runs/day
+      const runsPerL1PerDay = 1440 / node.timeMinutes;
 
-      // Actual runs/day with this many buildings
-      const runsPerDayActual = buildingCount * runsPerBuildingPerDay;
+      // "Level-1 equivalents" needed (a level-N building = N level-1 equivalents)
+      const l1EquivNeeded = runsPerDayFloat / runsPerL1PerDay;
 
-      // Output per day from this building type
+      // Distribute across building slots using levels.
+      // We want the fewest slots possible → each slot at max useful level.
+      // Spread evenly: if we need 53 L1-equiv, that's 6 slots at levels
+      // [9,9,9,9,9,8] since 6×9=54 ≥ 53.
+      const { slots, totalLevel } = distributeToSlots(l1EquivNeeded);
+      const slotCount = slots.length;
+
+      // Actual throughput: totalLevel × L1 throughput
+      const runsPerDayActual = totalLevel * runsPerL1PerDay;
       const outputPerDay = runsPerDayActual * node.outAmount;
       const neededPerDay = runsPerDayFloat * node.outAmount;
       const excessPerDay = outputPerDay - neededPerDay;
 
-      // Workers for `buildingCount` buildings
+      // Workers: each building slot uses the same workers regardless of level
       const wn = node.building?.workersNeeded || [0,0,0,0];
-      const totalWorkers = wn.map(w => w * buildingCount);
+      const totalWorkers = wn.map(w => w * slotCount);
 
       plan.push({
         matId,
         matName: node.matName,
         building: node.building,
         buildingName: node.building?.name || '?',
-        buildingCount,
-        buildingsExact,
+        slotCount,
+        slots,           // array of levels, e.g. [9, 9, 8]
+        totalLevel,      // sum of all slot levels (= effective L1 equivalents)
+        l1EquivNeeded,
         runsPerDayNeeded: runsPerDayFloat,
         runsPerDayActual,
         outputPerDay,
@@ -214,6 +224,40 @@
     }
 
     return plan;
+  }
+
+  /**
+   * Given a fractional number of "level-1 equivalents" needed, distribute
+   * across the minimum number of building slots with levels spread evenly.
+   * Returns { slots: number[], totalLevel: number }.
+   *
+   * Example: 53 L1-equiv → 6 slots at [9,9,9,9,9,8] (total 53... but we
+   * need to round up to cover demand, so [9,9,9,9,9,9] = 54).
+   */
+  function distributeToSlots(l1Equiv) {
+    const totalNeeded = Math.ceil(l1Equiv); // round up to cover demand
+    if (totalNeeded <= 0) return { slots: [1], totalLevel: 1 };
+    if (totalNeeded === 1) return { slots: [1], totalLevel: 1 };
+
+    // Find the optimal slot count: minimize slots while keeping max level
+    // reasonable. We want the fewest slots, so each slot is at a higher level.
+    // Max practical building level is ~30 (wiki says 200 but cost explodes).
+    // We'll cap at 30 for planning purposes.
+    const MAX_LEVEL = 30;
+
+    // Minimum slots = ceil(totalNeeded / MAX_LEVEL)
+    let slotCount = Math.ceil(totalNeeded / MAX_LEVEL);
+
+    // Distribute evenly: base level + remainder get +1
+    const baseLevel = Math.floor(totalNeeded / slotCount);
+    const remainder = totalNeeded - baseLevel * slotCount;
+
+    const slots = [];
+    for (let i = 0; i < slotCount; i++) {
+      slots.push(i < remainder ? baseLevel + 1 : baseLevel);
+    }
+
+    return { slots, totalLevel: totalNeeded };
   }
 
   /**
@@ -251,21 +295,46 @@
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Estimate build cost for `count` of a building.
-   * gamedata buildings have `constructionMaterials: [{ id, a }]` for base (level 1).
-   * Growth multiplier per wiki: level N cost = base × growthRate^(N-1).
-   * Since we're placing multiple level-1 buildings, total = count × base cost.
+   * Wiki upgrade cost growth factor for building at currentLevel → next level.
+   * Levels 1-8:  Growth = (0.1 × currentLevel) + (1.07 ^ currentLevel)
+   * Levels 9+:   Growth = 0.7 + (1.07^7) + ((currentLevel − 6) ^ 1.03) − (0.95 × (currentLevel − 6))
+   * New build:   Growth = 1
+   */
+  function upgradeGrowth(currentLevel) {
+    if (currentLevel === 0) return 1; // new build
+    if (currentLevel <= 8) return (0.1 * currentLevel) + Math.pow(1.07, currentLevel);
+    return 0.7 + Math.pow(1.07, 7) + Math.pow(currentLevel - 6, 1.03) - (0.95 * (currentLevel - 6));
+  }
+
+  /**
+   * Estimate total build cost for a building with given slots and levels.
+   * Cost to reach level N from scratch = sum of upgradeGrowth(0) + upgradeGrowth(1) + ... + upgradeGrowth(N-1)
+   * applied to each base construction material.
    * Returns { totalCredits, materials: [{ matId, matName, qty }] }
    */
-  function estimateBuildCost(building, count) {
+  function estimateBuildCost(building, slots) {
     const mats = building?.constructionMaterials || [];
     let totalCredits = 0;
-    const materials = [];
+    const materialTotals = {}; // matId → total qty
 
-    for (const cm of mats) {
-      const matId = cm.id ?? cm.i;
-      const baseQty = cm.a ?? cm.am ?? 0;
-      const qty = baseQty * count;
+    // For each slot, sum growth factors from level 0 to target level
+    for (const level of slots) {
+      let growthSum = 0;
+      for (let l = 0; l < level; l++) {
+        growthSum += upgradeGrowth(l);
+      }
+
+      for (const cm of mats) {
+        const matId = cm.id ?? cm.i;
+        const baseQty = cm.a ?? cm.am ?? 0;
+        const qty = Math.ceil(baseQty * growthSum);
+        materialTotals[matId] = (materialTotals[matId] || 0) + qty;
+      }
+    }
+
+    const materials = [];
+    for (const [id, qty] of Object.entries(materialTotals)) {
+      const matId = parseInt(id);
       const price = allPrices[matId] ?? 0;
       totalCredits += qty * price;
       materials.push({
@@ -482,17 +551,17 @@
 
       // Solve ratios
       const ratioMap = solveRatios(selectedMatId, chainNodes, selfProduceSet);
-      const plan = computePlan(selectedMatId, ratioMap, targetRate);
+      const plan = computePlan(selectedMatId, ratioMap, targetRate, prodSlots);
       const buyList = computeBuyList(plan, selfProduceSet, selectedMatId);
 
       // Check slot feasibility
-      const totalBuildings = plan.reduce((s, e) => s + e.buildingCount, 0);
-      const slotWarning = totalBuildings > prodSlots
-        ? `⚠ Plan requires ${totalBuildings} production buildings but only ${prodSlots} production slots available (${maxSlots} − ${reservedSlots} reserved). Consider reducing target rate or buying more intermediates.`
+      const totalSlots = plan.reduce((s, e) => s + e.slotCount, 0);
+      const slotWarning = totalSlots > prodSlots
+        ? `⚠ Plan requires ${totalSlots} building slots but only ${prodSlots} production slots available (${maxSlots} − ${reservedSlots} reserved). Consider reducing target rate or buying more intermediates.`
         : null;
 
       // Render
-      renderPlanResults(plan, buyList, targetRate, totalBuildings, prodSlots, slotWarning);
+      renderPlanResults(plan, buyList, targetRate, totalSlots, prodSlots, slotWarning);
 
       document.getElementById('bp-placeholder').style.display = 'none';
       document.getElementById('bp-result-section').classList.add('visible');
@@ -511,7 +580,7 @@
   // §8 — Render results
   // ═══════════════════════════════════════════════════════════════════════════
 
-  function renderPlanResults(plan, buyList, targetRate, totalBuildings, prodSlots, slotWarning) {
+  function renderPlanResults(plan, buyList, targetRate, totalSlots, prodSlots, slotWarning) {
     const matName = gameData.getMaterialName(selectedMatId);
     document.getElementById('bp-res-name').textContent = `${matName} @ ${targetRate}/day`;
 
@@ -526,10 +595,10 @@
     const burdenWeights = [1.0, 1.5, 2.5, 4.0];
     const burden = workerTotals.reduce((s, w, i) => s + w * burdenWeights[i], 0);
 
-    // Total build cost
+    // Total build cost (using slots with levels)
     let totalBuildCost = 0;
     for (const entry of plan) {
-      const cost = estimateBuildCost(entry.building, entry.buildingCount);
+      const cost = estimateBuildCost(entry.building, entry.slots);
       totalBuildCost += cost.totalCredits;
     }
 
@@ -543,11 +612,11 @@
 
     // Summary grid
     const summaryGrid = document.getElementById('bp-summary-grid');
-    const slotsColor = totalBuildings > prodSlots ? 'var(--red)' : 'var(--green)';
+    const slotsColor = totalSlots > prodSlots ? 'var(--red)' : 'var(--green)';
     summaryGrid.innerHTML = `
       <div class="plan-stat-box">
-        <div class="psb-label">Buildings</div>
-        <div class="psb-value" style="color:${slotsColor}">${totalBuildings}</div>
+        <div class="psb-label">Building Slots</div>
+        <div class="psb-value" style="color:${slotsColor}">${totalSlots}</div>
         <div class="psb-sub">of ${prodSlots} prod slots</div>
       </div>
       <div class="plan-stat-box">
@@ -586,15 +655,28 @@
     // Building list
     const buildingList = document.getElementById('bp-building-list');
     buildingList.innerHTML = plan.map(entry => {
-      const cost = estimateBuildCost(entry.building, entry.buildingCount);
+      const cost = estimateBuildCost(entry.building, entry.slots);
       const wStr = entry.workersNeeded.map((w, i) => w > 0 ? `${w}${['W','T','E','S'][i]}` : '').filter(Boolean).join(' ');
+
+      // Format slot levels: if all same → "3 slots @ Lv 9", else list them
+      const allSame = entry.slots.every(l => l === entry.slots[0]);
+      let levelStr;
+      if (entry.slotCount === 1) {
+        levelStr = `1 slot @ Lv ${entry.slots[0]}`;
+      } else if (allSame) {
+        levelStr = `${entry.slotCount} slots @ Lv ${entry.slots[0]}`;
+      } else {
+        levelStr = `${entry.slotCount} slots (Lv ${entry.slots.join(', ')})`;
+      }
+
       return `
         <div class="plan-building-row">
           <div>
             <div class="bld-name">${entry.buildingName}</div>
             <div style="font-size:10px;color:var(--text-muted)">→ ${entry.matName} (${entry.outAmount}/run, ${entry.timeMinutes}min)</div>
+            <div style="font-size:10px;color:var(--accent-dim)">${levelStr}</div>
           </div>
-          <div class="bld-count">${entry.buildingCount}×</div>
+          <div class="bld-count">${entry.slotCount} slots</div>
           <div class="bld-workers">${wStr || '—'}</div>
           <div class="bld-cost">${GtApi.formatCredits(cost.totalCredits)}</div>
         </div>
@@ -615,13 +697,21 @@
       const inputStr = entry.inputs.map(inp =>
         `${inp.amount}× ${gameData.getMaterialShortName(inp.matId)}`
       ).join(', ');
+      const allSame = entry.slots.every(l => l === entry.slots[0]);
+      const slotDesc = entry.slotCount === 1
+        ? `1 slot @ Lv ${entry.slots[0]}`
+        : allSame
+          ? `${entry.slotCount} slots @ Lv ${entry.slots[0]}`
+          : `${entry.slotCount} slots (Lv ${entry.slots.join(', ')})`;
+      const runsPerSlot = (1440 / entry.timeMinutes).toFixed(1);
       return `
         <div class="po-card">
-          <div class="po-title">${entry.buildingName} × ${entry.buildingCount}</div>
+          <div class="po-title">${entry.buildingName} — ${slotDesc}</div>
           <div class="po-detail">
             Recipe: ${inputStr} → ${entry.outAmount}× ${entry.matName}<br>
-            Runs/building/day: ${(1440 / entry.timeMinutes).toFixed(1)} &nbsp;|&nbsp;
-            Total output/day: ${entry.outputPerDay.toFixed(1)} units
+            Runs/slot/day: ${runsPerSlot} &nbsp;|&nbsp;
+            Effective output/day: ${entry.outputPerDay.toFixed(1)} units
+            (Lv scales ×inputs and ×outputs)
             ${entry.excessPerDay > 0.01 ? `<br><span style="color:var(--orange)">Excess: +${entry.excessPerDay.toFixed(1)}/day</span>` : ''}
           </div>
         </div>
@@ -696,12 +786,18 @@
 
     const tierLabels = ['W', 'T', 'E', 'S'];
     const workerStr = workerTotals.map((w, i) => w > 0 ? `${w}${tierLabels[i]}` : '').filter(Boolean).join(' + ');
-    const totalBuildings = plan.reduce((s, e) => s + e.buildingCount, 0);
+    const totalSlots = plan.reduce((s, e) => s + e.slotCount, 0);
 
     let text = `# Base Plan: ${matName} @ ${targetRate}/day\n\n`;
-    text += `## Buildings (${totalBuildings} slots)\n`;
+    text += `## Buildings (${totalSlots} slots)\n`;
     for (const entry of plan) {
-      text += `- ${entry.buildingCount}× ${entry.buildingName} → ${entry.matName}\n`;
+      const allSame = entry.slots.every(l => l === entry.slots[0]);
+      const lvlStr = entry.slotCount === 1
+        ? `Lv ${entry.slots[0]}`
+        : allSame
+          ? `${entry.slotCount}× Lv ${entry.slots[0]}`
+          : `Lv ${entry.slots.join(', ')}`;
+      text += `- ${entry.slotCount}× ${entry.buildingName} (${lvlStr}) → ${entry.matName}\n`;
     }
     text += `\n## Workers: ${workerStr}\n`;
     if (buyList.length > 0) {
