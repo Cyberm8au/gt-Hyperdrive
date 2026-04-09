@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Base Planner — GT Companion</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .planner-layout {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .planner-layout { grid-template-columns: 1fr; } }
+    .result-section { display: none; }
+    .result-section.visible { display: block; }
+
+    /* Chain tree tickboxes */
+    .chain-node {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 13px;
+    }
+    .chain-node .chain-indent {
+      display: inline-block;
+      width: 20px;
+      border-left: 1px solid var(--border);
+      margin-left: 10px;
+    }
+    .chain-node label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .chain-node .chain-buy {
+      font-size: 10px;
+      color: var(--orange);
+      margin-left: 6px;
+    }
+    .chain-node .chain-self {
+      font-size: 10px;
+      color: var(--green);
+      margin-left: 6px;
+    }
+    .chain-node .chain-raw {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-left: 6px;
+    }
+    .chain-node .mat-tier-badge {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: rgba(0,180,255,0.1);
+      color: var(--accent-dim);
+    }
+    .chain-node .building-tag {
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+
+    /* Plan output */
+    .plan-building-row {
+      display: grid;
+      grid-template-columns: 1fr 80px 80px 100px;
+      gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+      font-size: 13px;
+    }
+    .plan-building-row:last-child { border-bottom: none; }
+    .plan-building-row .bld-name { font-weight: 600; }
+    .plan-building-row .bld-count { text-align: center; font-family: var(--font-mono); color: var(--accent); font-weight: 700; }
+    .plan-building-row .bld-workers { text-align: center; font-size: 11px; color: var(--text-dim); }
+    .plan-building-row .bld-cost { text-align: right; font-family: var(--font-mono); color: var(--gold); }
+
+    .plan-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .plan-stat-box {
+      background: rgba(0,180,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      text-align: center;
+    }
+    .plan-stat-box .psb-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    .plan-stat-box .psb-value {
+      font-size: 18px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+    }
+    .plan-stat-box .psb-sub {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .plan-header-cols {
+      display: grid;
+      grid-template-columns: 1fr 80px 80px 100px;
+      gap: 8px;
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+      margin-bottom: 4px;
+    }
+    .plan-header-cols span:nth-child(2),
+    .plan-header-cols span:nth-child(3) { text-align: center; }
+    .plan-header-cols span:nth-child(4) { text-align: right; }
+
+    .worker-summary-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 12px;
+    }
+    .worker-summary-row .ws-tier { color: var(--text-dim); }
+    .worker-summary-row .ws-count { font-family: var(--font-mono); font-weight: 600; }
+
+    .po-card {
+      background: var(--bg-card2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      margin-bottom: 8px;
+    }
+    .po-card .po-title {
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .po-card .po-detail {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .copy-btn {
+      cursor: pointer;
+      background: rgba(0,180,255,0.1);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      padding: 4px 12px;
+      border-radius: var(--radius);
+      font-size: 11px;
+      transition: background 0.2s;
+    }
+    .copy-btn:hover { background: rgba(0,180,255,0.2); }
+  </style>
+</head>
+<body>
+  <div id="gt-nav"></div>
+
+  <div class="page-content">
+    <div class="page-header">
+      <div class="page-title">🏗 Base Production Planner</div>
+      <div class="page-subtitle">Plan optimal building layouts for a production base. Select a target material, choose which sub-materials to self-produce, and get building ratios.</div>
+    </div>
+
+    <div class="planner-layout">
+      <!-- Left panel: inputs -->
+      <div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Target Product</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Material</label>
+            <div class="autocomplete-wrap">
+              <input id="bp-mat-search" type="text" class="form-input" placeholder="Search material name…" autocomplete="off">
+              <div id="bp-autocomplete-list" class="autocomplete-list" style="display:none"></div>
+            </div>
+            <div id="bp-selected-mat" style="margin-top:8px;font-size:12px;color:var(--text-dim)"></div>
+          </div>
+
+          <div id="bp-recipe-selector" style="display:none;margin-bottom:16px">
+            <label class="form-label">Recipe / Building</label>
+            <div id="bp-recipe-options"></div>
+          </div>
+        </div>
+
+        <!-- Production chain: self-produce vs buy -->
+        <div id="bp-chain-panel" class="card" style="margin-top:12px;display:none">
+          <div class="card-header">
+            <div class="card-title">Production Chain</div>
+            <div style="display:flex;gap:6px">
+              <button id="bp-select-all" class="btn btn-ghost" style="padding:3px 8px;font-size:10px">All Self</button>
+              <button id="bp-select-none" class="btn btn-ghost" style="padding:3px 8px;font-size:10px">All Buy</button>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+            ✓ = produce on this base &nbsp;|&nbsp; ✗ = buy from exchange/contracts
+          </div>
+          <div id="bp-chain-tree"></div>
+        </div>
+
+        <!-- Constraints -->
+        <div class="card" style="margin-top:12px">
+          <div class="card-header">
+            <div class="card-title">⚙ Base Constraints</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Target output (units/day)</label>
+            <input id="bp-target-rate" type="number" class="form-input" value="100" min="1" max="100000" step="1">
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Desired daily production of the target material</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Max building slots</label>
+            <input id="bp-max-slots" type="number" class="form-input" value="25" min="3" max="50">
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Total slots on the base (incl. housing + warehouse)</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Reserved slots (housing + warehouse)</label>
+            <input id="bp-reserved-slots" type="number" class="form-input" value="3" min="0" max="20">
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Slots reserved for housing & storage (not production)</div>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button id="bp-calc-btn" class="btn btn-primary" style="flex:1;justify-content:center" disabled>
+              Generate Plan
+            </button>
+            <button id="bp-clear-btn" class="btn btn-ghost">Clear</button>
+          </div>
+
+          <div id="bp-error" class="error-box" style="margin-top:12px;display:none"></div>
+        </div>
+
+        <div class="info-box" style="margin-top:12px;font-size:12px">
+          💡 Building ratios are calculated to minimise excess intermediate materials. Assumes all production buildings run continuously.
+        </div>
+      </div>
+
+      <!-- Right panel: results -->
+      <div>
+        <!-- Placeholder -->
+        <div id="bp-placeholder" class="card" style="padding:40px;text-align:center;color:var(--text-muted)">
+          <div style="font-size:48px;margin-bottom:12px">🏗</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px">Select a target material</div>
+          <div style="font-size:12px">Search for a material above, then pick which sub-materials you want to produce yourself. The planner will calculate optimal building ratios.</div>
+        </div>
+
+        <!-- Results -->
+        <div id="bp-result-section" class="result-section">
+
+          <!-- Summary stats -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">📋 Plan Summary — <span id="bp-res-name"></span></div>
+              <button id="bp-copy-btn" class="copy-btn">📋 Copy Plan</button>
+            </div>
+
+            <div class="plan-summary-grid" id="bp-summary-grid">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Building list -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">🏭 Building Layout</div>
+            </div>
+            <div class="plan-header-cols">
+              <span>Building</span>
+              <span>Count</span>
+              <span>Workers</span>
+              <span>Build Cost</span>
+            </div>
+            <div id="bp-building-list"></div>
+          </div>
+
+          <!-- Worker totals -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">👷 Workforce Requirements</div>
+            </div>
+            <div id="bp-worker-summary"></div>
+            <div id="bp-burden-info" style="margin-top:8px;font-size:11px;color:var(--text-dim)"></div>
+          </div>
+
+          <!-- Production orders -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">📦 Production Orders</div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+              Set these production orders on each building (continuous repeat).
+            </div>
+            <div id="bp-po-list"></div>
+          </div>
+
+          <!-- Buy list -->
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+              <div class="card-title">🛒 Input Buy List (per day)</div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+              Materials you need to buy or import daily to sustain this base.
+            </div>
+            <div id="bp-buy-list"></div>
+          </div>
+
+          <!-- Excess materials -->
+          <div id="bp-excess-panel" class="card" style="margin-bottom:16px;display:none">
+            <div class="card-header">
+              <div class="card-title">♻ Excess Materials (per day)</div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+              Materials produced in surplus due to recipe ratios. Sell these or use on another base.
+            </div>
+            <div id="bp-excess-list"></div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/gamedata.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/base-planner.js"></script>
+</body>
+</html>
