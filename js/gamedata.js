@@ -203,6 +203,10 @@ class GameData {
    * Given a `workersNeeded` array from a building and a duration in days,
    * return { matId → quantity } of essential consumables consumed, pre-overhead.
    * optionalsToo=true includes optional consumables as well.
+   *
+   * IMPORTANT: per the wiki game-data reference, `workers[].consumables[].amount`
+   * is per **1,000 workers per day**, not per-worker per-day. So daily units
+   * for N workers = N × amount / 1000.
    */
   getConsumablesForBuilding(workersNeeded, durationDays, optionalsToo = false) {
     const totals = {};
@@ -214,7 +218,7 @@ class GameData {
       if (!w?.consumables) continue;
       for (const c of w.consumables) {
         if (!c.essential && !optionalsToo) continue;
-        const daily = count * c.amount;
+        const daily = (count * c.amount) / 1000;
         const qty = daily * durationDays;
         totals[c.matId] = (totals[c.matId] || 0) + qty;
       }

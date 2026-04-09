@@ -124,7 +124,7 @@
             <input id="set-prodSpeed" type="number" class="form-input" min="0" step="1" value="0">
 
             <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px">
-              <input id="set-includeConsumables" type="checkbox"> Include consumables in cost
+              <input id="set-includeConsumables" type="checkbox" checked> Include consumables in cost
             </label>
             <label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
               <input id="set-includeOptionals" type="checkbox"> Include optional consumables
@@ -228,8 +228,8 @@
             <div class="card-header">
               <div class="card-title">🍞 Worker Consumables</div>
             </div>
-            <div style="font-size:11px;color:var(--warn,#e67e22);margin-bottom:8px">
-              ⚠ This is a worst-case estimate that attributes a building's full daily consumable burn to this single recipe. In reality consumables are amortized across everything the building produces and most players self-supply them at marginal cost. Disable in settings unless you're stress-testing.
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+              Consumption = workers × amount ÷ 1000 × runDurationDays × overhead mult, priced at current exchange rates. Note that in practice you probably self-supply essentials at marginal cost, so these figures represent the cost if you had to buy them from the market.
             </div>
             <div class="cost-row">
               <span class="cost-label">Consumable cost</span>

@@ -28,18 +28,18 @@
     empireBurden: 2000,        // Total empire workforce burden (Σ workers × burden)
     prodSpeedBonusPct: 0,      // Aggregate production-speed bonus from tech + perks (%)
     includeOptionals: false,   // Factor optional consumables in cost
-    includeConsumables: false  // Master toggle — off by default (see consumables-panel caveat)
+    includeConsumables: true   // Master toggle — on after wiki fix (÷1000 unit correction)
   };
-  const SETTINGS_VERSION = 2; // bump to migrate / reset misleading defaults
+  const SETTINGS_VERSION = 3; // bump to migrate / reset misleading defaults
   let settings = { ...DEFAULT_SETTINGS };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (raw) {
       settings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-      // Migration: v2 disables consumables by default since per-recipe
-      // attribution heavily inflates cost vs. how players actually budget.
-      if (!settings.__v || settings.__v < 2) {
-        settings.includeConsumables = false;
+      // Migration v3: re-enable consumables after fixing the /1000 unit bug
+      // in getConsumablesForBuilding (wiki says `amount` is per 1k workers/day).
+      if (!settings.__v || settings.__v < 3) {
+        settings.includeConsumables = true;
         settings.__v = SETTINGS_VERSION;
       }
     } else {
@@ -56,18 +56,28 @@
    * totalMult is applied to base consumable rates.
    */
   function computeConsumptionMultiplier() {
-    // Base overhead from burden
+    // Wiki formula (gt_wiki_reference.md §1):
+    //   Overhead Raw = max(0, (burden - 2000) / 100000)
+    //   Overhead After Mult = Raw × (1 + adminOptPct/100) × (1 + supervisionPct/100)
+    //   Flat Reduction = min(guildAdminCenter/100, OverheadAfterMult/2)
+    //   Overhead Final = max(0, OverheadAfterMult - FlatReduction)
+    //   Consumption Overhead Mult = 1 + Overhead Final
+    //   Effective Rate = Base × Mult × (1 + ConsumptionPerkPct/100)
     const overheadRaw = Math.max(0, (settings.empireBurden - 2000) / 100000);
-    // Multiplicative reductions stack additively as percent reductions
-    let overheadReductionPct =
-      settings.adminOptLvl * 2.5 +
-      settings.efficientSupLvl * 5 +
-      settings.laxSupLvl * 35;
-    if (settings.strictSup) overheadReductionPct -= 50; // penalty
-    const overheadAfterMult = overheadRaw * Math.max(0, 1 - overheadReductionPct / 100);
+    // BonusType 10 — Administrative Optimization (negative value reduces)
+    const adminOptPct = -settings.adminOptLvl * 2.5;
+    // BonusType 26 — Supervision (exclusive group 1): Strict adds +50, Efficient -5/lvl, Lax -35/lvl
+    let supervisionPct = 0;
+    if (settings.strictSup)             supervisionPct = 50;
+    else if (settings.efficientSupLvl)  supervisionPct = -settings.efficientSupLvl * 5;
+    else if (settings.laxSupLvl)        supervisionPct = -settings.laxSupLvl * 35;
+    const overheadAfterMult = overheadRaw
+      * Math.max(0, 1 + adminOptPct / 100)
+      * Math.max(0, 1 + supervisionPct / 100);
     const flatRed = Math.min(settings.guildAdminCenter / 100, overheadAfterMult / 2);
     const overheadFinal = Math.max(0, overheadAfterMult - flatRed);
     const overheadMult = 1 + overheadFinal;
+    // BonusType 9 — Workforce Consumption (Workforce Efficiency: -2%/lvl)
     const consumptionPerkMult = Math.max(0, 1 - (settings.workforceEffLvl * 2) / 100);
     return {
       overheadMult,
@@ -228,14 +238,18 @@
     const outAmt  = output?.amount || 1;
     const runs    = qty / outAmt;
     const building = gameData.getRecipeBuilding(recipe);
-    // Production speed: global setting × per-recipe technology bonus
-    // (technologies give +5% per level to buildings matching their specialization)
-    let techBonus = 0;
+    // Production speed (wiki §2):
+    //   Speed = Workforce × Building × (1 + techLvl×5% + additiveSpeedPerks) × PlanetAbundance × Starting × MultPerks
+    // In cost-calc we assume 100% workforce + building (users can override via
+    // prodSpeedBonusPct setting); tech bonus is additive with that setting, not
+    // a separate multiplicative term.
+    let techBonusPct = 0;
     if (companyTechnologies && building?.specialization) {
       const tech = companyTechnologies.find(t => t.id === building.specialization);
-      if (tech) techBonus = (tech.level || 0) * 0.05;
+      if (tech) techBonusPct = (tech.level || 0) * 5;
     }
-    const speedMult = (1 + (settings.prodSpeedBonusPct || 0) / 100) * (1 + techBonus);
+    const additiveSpeedPct = (settings.prodSpeedBonusPct || 0) + techBonusPct;
+    const speedMult = Math.max(0.01, 1 + additiveSpeedPct / 100);
     const runMinutes = (recipe.timeMinutes || 0) / speedMult;
     const recipeTimeMinutes = runMinutes * runs;
     const recipeDurationDays = recipeTimeMinutes / 1440;
